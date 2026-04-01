@@ -3,6 +3,8 @@ export { API_BASE, ApiError, apiFetch, apiPost, apiDelete } from "./api";
 export {
 	detectImage,
 	detectVideo,
+	startVideoProcessing,
+	getVideoJobStatus,
 	fetchIncidents,
 	clearIncidents,
 	getIncidentImageUrl,
@@ -17,4 +19,8 @@ export {
 	type SessionMetrics,
 	type AppConfig,
 	type DetectionResponse,
+	type VideoProgressState,
+	type SavedDetectionState,
+	type SavedVideoState,
+	type VideoJobStatus,
 } from "./ppe-types";

@@ -69,9 +69,10 @@ export interface Incident {
 	id: string;
 	timestamp: string;
 	missing_ppe: string[];
-	frame_number: number;
+	frame_number: number | null;
 	image_path?: string;
 	image_filename?: string;
+	is_video?: boolean;
 }
 
 export interface SessionMetrics {
@@ -98,8 +99,48 @@ export interface DetectionResponse {
 	image_height: number;
 }
 
+export interface VideoProgressState {
+	processing: boolean;
+	progress: number;
+	framesProcessed: number;
+	totalFrames: number;
+	alertsFound: number;
+}
+
+// Saved state interfaces for localStorage persistence
+export interface SavedDetectionState {
+	mediaType: "image" | "video" | "none";
+	detections: Detection[];
+	imageUrl: string | null;
+	timestamp: number;
+}
+
+export interface SavedVideoState {
+	fileName: string;
+	fileSize: number;
+	fileType: string;
+	timestamp: number;
+	jobId?: string; // Optional job ID for async processing
+}
+
+// Video job status for async processing
+export interface VideoJobStatus {
+	job_id: string;
+	status: "pending" | "processing" | "completed" | "failed";
+	progress_percent: number;
+	frames_processed: number;
+	total_frames: number;
+	alerts_found: number;
+	video_filename: string;
+	error_message?: string;
+}
+
 // Helper to format class names for display
 export function formatClassName(name: string): string {
-	// Replace hyphens with spaces and capitalize each word
-	return name.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+	// Replace hyphens with spaces
+	const withSpaces = name.replace(/-/g, " ");
+	// Convert to lowercase then title case each word
+	return withSpaces
+		.toLowerCase()
+		.replace(/\b\w/g, (char) => char.toUpperCase());
 }

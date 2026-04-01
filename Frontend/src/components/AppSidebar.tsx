@@ -48,7 +48,7 @@ export function AppSidebar() {
 	} = usePPE();
 
 	return (
-		<Sidebar collapsible="none">
+		<Sidebar collapsible="offcanvas">
 			<SidebarContent>
 				{/* Logo */}
 				<SidebarGroup>

@@ -5,6 +5,7 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
+	useRef,
 } from "react";
 import { toast } from "sonner";
 import {
@@ -15,13 +16,16 @@ import {
 	fetchIncidents,
 	clearIncidents,
 	detectImage,
-	detectVideo,
+	startVideoProcessing,
+	getVideoJobStatus,
 } from "@/lib";
 import type {
 	AppConfig,
 	SessionMetrics,
 	Incident,
 	DetectionResponse,
+	VideoProgressState,
+	VideoJobStatus,
 } from "@/lib";
 
 interface PPEContextValue {
@@ -34,14 +38,25 @@ interface PPEContextValue {
 	sessionStart: Date;
 	isLoading: boolean;
 
+	// Video Processing State (persisted)
+	videoProcessing: boolean;
+	videoProgress: number;
+	videoFramesProcessed: number;
+	videoTotalFrames: number;
+	videoAlertsFound: number;
+
 	// Actions
 	setConfig: (partial: Partial<AppConfig>) => Promise<void>;
 	uploadModel: (file: File) => Promise<boolean>;
 	uploadImage: (file: File) => Promise<DetectionResponse | null>;
-	uploadVideo: (file: File) => Promise<void>;
+	uploadVideo: (
+		file: File,
+	) => Promise<{ frames_processed: number; alerts_count: number } | null>;
 	refreshData: () => Promise<void>;
 	clearAllIncidents: () => Promise<void>;
 	toggleDarkMode: () => void;
+	setVideoProcessing: (processing: boolean) => void;
+	setVideoProgress: (progress: VideoProgressState) => void;
 }
 
 const defaultConfig: AppConfig = {
@@ -76,6 +91,17 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 	const [isDarkMode, setIsDarkMode] = useState(true);
 	const [isLoading, setIsLoading] = useState(false);
 	const [sessionStart] = useState(() => new Date());
+
+	// Video Processing State
+	const [videoProcessing, setVideoProcessing] = useState(false);
+	const [videoProgress, setVideoProgressState] = useState(0);
+	const [videoFramesProcessed, setVideoFramesProcessed] = useState(0);
+	const [videoTotalFrames, setVideoTotalFrames] = useState(0);
+	const [videoAlertsFound, setVideoAlertsFound] = useState(0);
+
+	// Video job polling refs
+	const jobPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+	const currentJobIdRef = useRef<string | null>(null);
 
 	// Apply dark mode
 	useEffect(() => {
@@ -178,25 +204,6 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 		[refreshData],
 	);
 
-	// Upload video for detection
-	const uploadVideo = useCallback(
-		async (file: File): Promise<void> => {
-			setIsLoading(true);
-			try {
-				await detectVideo(file);
-				await refreshData();
-				toast.success("Video processing complete");
-			} catch (error) {
-				const message =
-					error instanceof Error ? error.message : "Failed to process video";
-				toast.error(message);
-			} finally {
-				setIsLoading(false);
-			}
-		},
-		[refreshData],
-	);
-
 	// Clear all incidents
 	const clearAllIncidents = useCallback(async () => {
 		try {
@@ -213,6 +220,149 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 		setIsDarkMode((prev) => !prev);
 	}, []);
 
+	// Video processing state setters
+	const setVideoProcessingState = useCallback((processing: boolean) => {
+		setVideoProcessing(processing);
+		// Persist to localStorage
+		if (processing) {
+			localStorage.setItem("ppe_video_processing", "true");
+		} else {
+			localStorage.removeItem("ppe_video_processing");
+			localStorage.removeItem("ppe_video_file");
+		}
+	}, []);
+
+	const setVideoProgress = useCallback((progress: VideoProgressState) => {
+		setVideoProgressState(progress.progress);
+		setVideoFramesProcessed(progress.framesProcessed);
+		setVideoTotalFrames(progress.totalFrames);
+		setVideoAlertsFound(progress.alertsFound);
+		// Persist progress
+		localStorage.setItem("ppe_video_progress", JSON.stringify(progress));
+	}, []);
+
+	// Upload video for detection (async with polling) - defined after setters
+	const uploadVideo = useCallback(
+		async (
+			file: File,
+			onProgress?: (state: VideoProgressState) => void,
+		): Promise<{ frames_processed: number; alerts_count: number } | null> => {
+			setIsLoading(true);
+			setVideoProcessingState(true);
+
+			try {
+				// Start video processing job
+				const startResult = await startVideoProcessing(file);
+				const jobId = startResult.job_id;
+				currentJobIdRef.current = jobId;
+
+				// Set initial progress
+				const initialState: VideoProgressState = {
+					processing: true,
+					progress: 5,
+					framesProcessed: 0,
+					totalFrames: startResult.estimated_frames,
+					alertsFound: 0,
+				};
+				setVideoProgress(initialState);
+				onProgress?.(initialState);
+
+				// Poll for job status
+				return new Promise((resolve, reject) => {
+					const pollInterval = setInterval(async () => {
+						try {
+							const jobStatus = await getVideoJobStatus(jobId);
+
+							// Update progress
+							const progressState: VideoProgressState = {
+								processing:
+									jobStatus.status === "processing" ||
+									jobStatus.status === "pending",
+								progress: jobStatus.progress_percent,
+								framesProcessed: jobStatus.frames_processed,
+								totalFrames: jobStatus.total_frames,
+								alertsFound: jobStatus.alerts_found,
+							};
+							setVideoProgress(progressState);
+							onProgress?.(progressState);
+
+							// Check if job is complete
+							if (jobStatus.status === "completed") {
+								clearInterval(pollInterval);
+								jobPollIntervalRef.current = null;
+								currentJobIdRef.current = null;
+								setVideoProcessingState(false);
+								await refreshData();
+								toast.success("Video processing complete");
+								resolve({
+									frames_processed: jobStatus.frames_processed,
+									alerts_count: jobStatus.alerts_found,
+								});
+							} else if (jobStatus.status === "failed") {
+								clearInterval(pollInterval);
+								jobPollIntervalRef.current = null;
+								currentJobIdRef.current = null;
+								setVideoProcessingState(false);
+								reject(
+									new Error(
+										jobStatus.error_message || "Video processing failed",
+									),
+								);
+							}
+						} catch (error) {
+							// Continue polling on error, but log it
+							console.error("Error polling job status:", error);
+						}
+					}, 2000); // Poll every 2 seconds
+
+					jobPollIntervalRef.current = pollInterval;
+
+					// Timeout after 30 minutes
+					setTimeout(
+						() => {
+							if (jobPollIntervalRef.current) {
+								clearInterval(jobPollIntervalRef.current);
+								jobPollIntervalRef.current = null;
+								setVideoProcessingState(false);
+								reject(new Error("Video processing timed out"));
+							}
+						},
+						30 * 60 * 1000,
+					);
+				});
+			} catch (error) {
+				const message =
+					error instanceof Error ? error.message : "Failed to process video";
+				toast.error(message);
+				setVideoProcessingState(false);
+				return null;
+			} finally {
+				setIsLoading(false);
+			}
+		},
+		[refreshData, setVideoProcessingState, setVideoProgress],
+	);
+
+	// Restore video processing state on mount
+	useEffect(() => {
+		const saved = localStorage.getItem("ppe_video_processing");
+		if (saved === "true") {
+			const savedProgress = localStorage.getItem("ppe_video_progress");
+			if (savedProgress) {
+				try {
+					const progress: VideoProgressState = JSON.parse(savedProgress);
+					setVideoProcessing(true);
+					setVideoProgressState(progress.progress);
+					setVideoFramesProcessed(progress.framesProcessed);
+					setVideoTotalFrames(progress.totalFrames);
+					setVideoAlertsFound(progress.alertsFound);
+				} catch {
+					// Ignore parse errors
+				}
+			}
+		}
+	}, []);
+
 	// Memoize context value
 	const value = useMemo<PPEContextValue>(
 		() => ({
@@ -223,6 +373,11 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			isDarkMode,
 			sessionStart,
 			isLoading,
+			videoProcessing,
+			videoProgress,
+			videoFramesProcessed,
+			videoTotalFrames,
+			videoAlertsFound,
 			setConfig,
 			uploadModel,
 			uploadImage,
@@ -230,6 +385,8 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			refreshData,
 			clearAllIncidents,
 			toggleDarkMode,
+			setVideoProcessing: setVideoProcessingState,
+			setVideoProgress,
 		}),
 		[
 			config,
@@ -239,6 +396,11 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			isDarkMode,
 			sessionStart,
 			isLoading,
+			videoProcessing,
+			videoProgress,
+			videoFramesProcessed,
+			videoTotalFrames,
+			videoAlertsFound,
 			setConfig,
 			uploadModel,
 			uploadImage,
@@ -246,6 +408,8 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			refreshData,
 			clearAllIncidents,
 			toggleDarkMode,
+			setVideoProcessingState,
+			setVideoProgress,
 		],
 	);
 

@@ -123,16 +123,9 @@ function IncidentGallery({
 										<p className="text-[10px] font-mono text-muted-foreground">
 											{inc.timestamp}
 										</p>
-										<div className="flex gap-1 mt-1">
-											{inc.missing_ppe.map((className) => (
-												<span
-													key={className}
-													className="text-[9px] text-safety-red font-medium"
-												>
-													{formatClassName(className)}
-												</span>
-											))}
-										</div>
+										<p className="text-[9px] text-safety-red font-medium mt-1">
+											{inc.missing_ppe.map(formatClassName).join(", ")}
+										</p>
 									</div>
 								</motion.div>
 							);
@@ -221,7 +214,7 @@ export default function IncidentLogs() {
 									<TableRow>
 										<TableHead className="text-xs">Timestamp</TableHead>
 										<TableHead className="text-xs">Missing PPE</TableHead>
-										<TableHead className="text-xs">Frame #</TableHead>
+										<TableHead className="text-xs">Source</TableHead>
 										<TableHead className="text-xs">Image</TableHead>
 									</TableRow>
 								</TableHeader>
@@ -251,7 +244,9 @@ export default function IncidentLogs() {
 												</div>
 											</TableCell>
 											<TableCell className="py-2 text-xs font-mono">
-												{inc.frame_number}
+												{inc.is_video
+													? `Frame ${inc.frame_number}`
+													: "Image Upload"}
 											</TableCell>
 											<TableCell className="py-2">
 												{inc.image_path ? (
