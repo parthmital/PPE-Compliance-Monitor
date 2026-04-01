@@ -2,11 +2,10 @@ import {
 	LayoutDashboard,
 	ScanEye,
 	FileWarning,
-	Upload,
-	RotateCcw,
 	Moon,
 	Sun,
 	Shield,
+	RotateCcw,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -27,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { usePPE } from "@/contexts/PPEContext";
+import { FileUploadButton } from "./FileUploadButton";
 
 const navItems = [
 	{ title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -38,8 +38,14 @@ export function AppSidebar() {
 	const { state } = useSidebar();
 	const collapsed = state === "collapsed";
 	const location = useLocation();
-	const { config, setConfig, sessionStart, isDarkMode, toggleDarkMode } =
-		usePPE();
+	const {
+		config,
+		setConfig,
+		sessionStart,
+		isDarkMode,
+		toggleDarkMode,
+		uploadModel,
+	} = usePPE();
 
 	return (
 		<Sidebar collapsible="none">
@@ -123,14 +129,14 @@ export function AppSidebar() {
 											{config.model_name}
 										</span>
 									</div>
-									<Button
+									<FileUploadButton
+										onUpload={uploadModel}
+										accept=".pt,.pth,.onnx"
+										label="Upload Weights"
 										variant="outline"
 										size="sm"
-										className="w-full text-xs gap-1"
-									>
-										<Upload className="h-3 w-3" />
-										Upload Weights
-									</Button>
+										className="w-full text-xs"
+									/>
 								</div>
 							</SidebarGroupContent>
 						</SidebarGroup>

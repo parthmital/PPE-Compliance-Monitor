@@ -11,7 +11,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -38,7 +37,7 @@ venv/
 ENV/
 
 # Output
-incidents/
+data/
 .temp/
 
 # Model weights (large files — track with Git LFS or exclude)
@@ -56,7 +55,7 @@ incidents/
 *.7z
 
 # Input Datasets
-Backend/Input Files/
+/Input Files/
 
 # OS Files
 .DS_Store

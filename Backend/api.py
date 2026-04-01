@@ -1,10 +1,12 @@
 import os
 import asyncio
-import tempfile
+import json
+import shutil
 from fastapi import FastAPI, UploadFile, File, Request, HTTPException, Security, Depends
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -17,6 +19,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI()
+
+# Centralized data directory - ALL data goes here, nothing in memory
+DATA_DIR = Path("data")
+INCIDENTS_DIR = DATA_DIR / "incidents"
+TEMP_DIR = DATA_DIR / "temp"
+INCIDENTS_FILE = DATA_DIR / "incidents.json"
+METRICS_FILE = DATA_DIR / "metrics.json"
+
+# Create all data directories on startup
+DATA_DIR.mkdir(exist_ok=True)
+INCIDENTS_DIR.mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True)
 
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
@@ -34,7 +48,7 @@ def verify_api_key(api_key: str = Security(api_key_header)):
     return api_key
 
 
-MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", 50 * 1024 * 1024))  # default 50MB
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", 50 * 1024 * 1024))
 TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", 120))
 
 
@@ -57,6 +71,10 @@ app.add_middleware(
 
 WEIGHTS_PATH = Path(os.getenv("MODEL_PATH", "Trained Weights/best.pt"))
 model = None
+
+# Dynamic thresholds (configurable via API)
+confidence_threshold = 0.40
+nms_iou_threshold = 0.45
 
 if WEIGHTS_PATH.exists():
     try:
@@ -85,18 +103,8 @@ CLASS_NAMES = [
 VIOLATION_CLASSES = {"NO-Hardhat", "NO-Safety Vest"}
 COMPLIANCE_CLASSES = {"Hardhat", "Safety Vest", "Mask"}
 
-# State for metrics and incidents
-metrics_state = {
-    "safety_score": 100.0,
-    "detection_accuracy": 0.87,
-    "alerts_per_hour": 0.0,
-    "false_alarm_rate": 0.0,
-    "frames_processed": 0,
-    "violation_frames": 0,
-    "confirmed_alerts": 0,
-    "persons_detected": 0,
-}
-
+# All state loaded from disk, not memory
+metrics_state = {}
 incidents_state = []
 session_start = datetime.now()
 total_persons = 0
@@ -104,8 +112,74 @@ compliant_persons = 0
 TEMPORAL_WINDOW = 5
 temporal_buffers = {}
 
-INCIDENT_DIR = Path("incidents")
-INCIDENT_DIR.mkdir(exist_ok=True)
+
+def load_metrics():
+    """Load metrics from JSON file on startup."""
+    global metrics_state
+    if METRICS_FILE.exists():
+        try:
+            with open(METRICS_FILE, "r") as f:
+                metrics_state = json.load(f)
+        except Exception as e:
+            print(f"Failed to load metrics: {e}")
+            metrics_state = get_default_metrics()
+    else:
+        metrics_state = get_default_metrics()
+
+
+def get_default_metrics():
+    return {
+        "safety_score": 100.0,
+        "detection_accuracy": 0.87,
+        "alerts_per_hour": 0.0,
+        "false_alarm_rate": 0.0,
+        "frames_processed": 0,
+        "violation_frames": 0,
+        "confirmed_alerts": 0,
+        "persons_detected": 0,
+    }
+
+
+def save_metrics():
+    """Save metrics to JSON file."""
+    try:
+        with open(METRICS_FILE, "w") as f:
+            json.dump(metrics_state, f, indent=2)
+    except Exception as e:
+        print(f"Failed to save metrics: {e}")
+
+
+def load_incidents():
+    """Load incidents from JSON file on startup."""
+    global incidents_state
+    if INCIDENTS_FILE.exists():
+        try:
+            with open(INCIDENTS_FILE, "r") as f:
+                data = json.load(f)
+                incidents_state = data if isinstance(data, list) else []
+                print(f"Loaded {len(incidents_state)} incidents from disk")
+        except Exception as e:
+            print(f"Failed to load incidents: {e}")
+            incidents_state = []
+    else:
+        incidents_state = []
+
+
+def save_incidents():
+    """Save incidents to JSON file."""
+    try:
+        with open(INCIDENTS_FILE, "w") as f:
+            json.dump(incidents_state, f, indent=2)
+    except Exception as e:
+        print(f"Failed to save incidents: {e}")
+
+
+# Serve incident images statically from data/incidents/
+app.mount(
+    "/api/incidents/images",
+    StaticFiles(directory=str(INCIDENTS_DIR)),
+    name="incident_images",
+)
 
 
 @app.get("/api/config", dependencies=[Depends(verify_api_key)])
@@ -113,6 +187,8 @@ async def get_config():
     return {
         "model_loaded": model is not None,
         "model_name": WEIGHTS_PATH.name if model else "",
+        "confidence_threshold": confidence_threshold,
+        "nms_iou_threshold": nms_iou_threshold,
     }
 
 
@@ -147,13 +223,59 @@ async def get_incidents():
     return {"incidents": incidents_state}
 
 
-@app.post("/api/incidents/clear", dependencies=[Depends(verify_api_key)])
+@app.delete("/api/incidents/clear", dependencies=[Depends(verify_api_key)])
 async def clear_incidents():
     global incidents_state
     incidents_state.clear()
-    for f in INCIDENT_DIR.glob("*.jpg"):
+    # Clear the JSON file
+    if INCIDENTS_FILE.exists():
+        INCIDENTS_FILE.unlink()
+    # Clear all incident images from data/incidents/
+    for f in INCIDENTS_DIR.glob("*.jpg"):
         f.unlink(missing_ok=True)
     return {"status": "ok"}
+
+
+@app.post("/api/config/thresholds", dependencies=[Depends(verify_api_key)])
+async def update_thresholds(conf: float = 0.40, iou: float = 0.45):
+    global confidence_threshold, nms_iou_threshold
+    confidence_threshold = max(0.1, min(0.95, conf))
+    nms_iou_threshold = max(0.1, min(0.95, iou))
+    return {
+        "confidence_threshold": confidence_threshold,
+        "nms_iou_threshold": nms_iou_threshold,
+    }
+
+
+@app.post("/api/model/reload", dependencies=[Depends(verify_api_key)])
+async def reload_model(weights_file: UploadFile = File(...)):
+    global model, WEIGHTS_PATH
+    try:
+        # Save uploaded weights to data/models/ directory
+        models_dir = DATA_DIR / "models"
+        models_dir.mkdir(exist_ok=True)
+
+        # Use original filename or default to uploaded.pt
+        filename = weights_file.filename or "uploaded.pt"
+        save_path = models_dir / filename
+
+        contents = await weights_file.read()
+        with open(save_path, "wb") as f:
+            f.write(contents)
+
+        # Try to load the new model
+        new_model = YOLO(str(save_path))
+        model = new_model
+        WEIGHTS_PATH = save_path
+
+        return {
+            "status": "success",
+            "model_loaded": True,
+            "model_name": filename,
+            "path": str(save_path),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
 
 def update_temporal_buffers(detected_violations: set):
@@ -182,8 +304,15 @@ async def detect_image(file: UploadFile = File(...)):
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    img_height, img_width = frame.shape[:2]
 
-    results = model.predict(frame, imgsz=640, conf=0.40, iou=0.45, verbose=False)[0]
+    results = model.predict(
+        frame,
+        imgsz=640,
+        conf=confidence_threshold,
+        iou=nms_iou_threshold,
+        verbose=False,
+    )[0]
 
     detections = []
     violations = set()
@@ -238,18 +367,25 @@ async def detect_image(file: UploadFile = File(...)):
         metrics_state["confirmed_alerts"] += 1
         ts = datetime.now()
         ts_str = ts.strftime("%Y%m%d_%H%M%S_%f")
-        fname = INCIDENT_DIR / f"incident_{ts_str}.jpg"
+        fname = INCIDENTS_DIR / f"incident_{ts_str}.jpg"
         cv2.imwrite(str(fname), frame)
         entry = {
             "id": str(uuid.uuid4()),
             "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
             "missing_ppe": list(confirmed),
             "frame_number": metrics_state["frames_processed"],
-            "image_path": str(fname),
+            "image_path": f"/api/incidents/images/incident_{ts_str}.jpg",
+            "image_filename": fname.name,
         }
         incidents_state.insert(0, entry)
+        save_incidents()  # Persist to disk
+        save_metrics()  # Persist metrics to disk
 
-    return {"detections": detections}
+    return {
+        "detections": detections,
+        "image_width": img_width,
+        "image_height": img_height,
+    }
 
 
 @app.post("/api/detect/video", dependencies=[Depends(verify_api_key)])
@@ -268,13 +404,15 @@ async def detect_video(file: UploadFile = File(...)):
 async def process_video(file: UploadFile):
     global total_persons, compliant_persons
 
-    # Save the uploaded video temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
-        content = await file.read()
-        temp_video.write(content)
-        temp_video_path = temp_video.name
+    # Save the uploaded video to data/temp/ (not system temp)
+    temp_video_path = (
+        TEMP_DIR / f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.mp4"
+    )
+    content = await file.read()
+    with open(temp_video_path, "wb") as f:
+        f.write(content)
 
-    cap = cv2.VideoCapture(temp_video_path)
+    cap = cv2.VideoCapture(str(temp_video_path))
     frames_processed = 0
     alerts_found = 0
 
@@ -283,7 +421,13 @@ async def process_video(file: UploadFile):
         if not ret:
             break
 
-        results = model.predict(frame, imgsz=640, conf=0.40, iou=0.45, verbose=False)[0]
+        results = model.predict(
+            frame,
+            imgsz=640,
+            conf=confidence_threshold,
+            iou=nms_iou_threshold,
+            verbose=False,
+        )[0]
 
         violations = set()
         has_hardhat = False
@@ -320,20 +464,33 @@ async def process_video(file: UploadFile):
             alerts_found += 1
             ts = datetime.now()
             ts_str = ts.strftime("%Y%m%d_%H%M%S_%f")
-            fname = INCIDENT_DIR / f"incident_{ts_str}.jpg"
+            fname = INCIDENTS_DIR / f"incident_{ts_str}.jpg"
             cv2.imwrite(str(fname), frame)
             entry = {
                 "id": str(uuid.uuid4()),
                 "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
                 "missing_ppe": list(confirmed),
                 "frame_number": metrics_state["frames_processed"],
-                "image_path": str(fname),
+                "image_path": f"/api/incidents/images/incident_{ts_str}.jpg",
+                "image_filename": fname.name,
             }
             incidents_state.insert(0, entry)
+            save_incidents()  # Persist to disk
+            save_metrics()  # Persist metrics to disk
 
         frames_processed += 1
 
     cap.release()
-    os.unlink(temp_video_path)
+    # Clean up temp file
+    temp_video_path.unlink(missing_ok=True)
 
     return {"frames_processed": frames_processed, "alerts_count": alerts_found}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Load all persisted data from disk on startup
+    load_metrics()
+    load_incidents()
+    uvicorn.run(app, host="0.0.0.0", port=8000)

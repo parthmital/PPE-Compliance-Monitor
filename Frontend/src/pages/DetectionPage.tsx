@@ -1,286 +1,67 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-	Upload,
-	Image as ImageIcon,
-	Video,
-	CheckCircle2,
-	AlertTriangle,
-	ShieldAlert,
-	ShieldCheck,
-	Play,
-	Square,
-	Loader2,
-} from "lucide-react";
+import { Image as ImageIcon, Video, CheckCircle2, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
-import { PPE_CLASSES, type Detection } from "@/lib/ppe-types";
 import { usePPE } from "@/contexts/PPEContext";
+import {
+	AlertBanner,
+	DropZone,
+	ImagePreview,
+	DetectionTable,
+	type MediaType,
+	type AlertLevel,
+} from "@/components";
+import type { Detection } from "@/lib";
 
-type MediaType = "none" | "image" | "video";
-type AlertLevel = "clear" | "potential" | "confirmed";
-
-const API_BASE =
-	import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
-
-function DropZone({
-	onFileSelect,
-}: {
-	onFileSelect: (type: MediaType, file?: File) => void;
-}) {
-	const [dragOver, setDragOver] = useState(false);
-
-	const handleDrop = useCallback(
-		(e: React.DragEvent) => {
-			e.preventDefault();
-			setDragOver(false);
-			const file = e.dataTransfer.files[0];
-			if (!file) return;
-			if (file.type.startsWith("image/")) onFileSelect("image", file);
-			else if (file.type.startsWith("video/")) onFileSelect("video", file);
-		},
-		[onFileSelect],
-	);
-
-	return (
-		<div
-			className={`border-2 border-dashed rounded-xl p-12 text-center transition-all cursor-pointer ${
-				dragOver
-					? "border-primary bg-primary/5"
-					: "border-border hover:border-primary/50"
-			}`}
-			onDragOver={(e) => {
-				e.preventDefault();
-				setDragOver(true);
-			}}
-			onDragLeave={() => setDragOver(false)}
-			onDrop={handleDrop}
-		>
-			<Upload className="h-10 w-10 mx-auto text-muted-foreground mb-4" />
-			<p className="text-sm font-medium text-foreground">
-				Drop image or video here
-			</p>
-			<p className="text-xs text-muted-foreground mt-1">
-				JPG, PNG, MP4, AVI supported
-			</p>
-		</div>
-	);
-}
-
-function AlertBanner({ level }: { level: AlertLevel }) {
-	if (level === "clear")
-		return (
-			<motion.div
-				initial={{ opacity: 0 }}
-				animate={{ opacity: 1 }}
-				className="flex items-center gap-2 rounded-lg bg-safety-green/10 border border-safety-green/30 px-4 py-3"
-			>
-				<ShieldCheck className="h-5 w-5 text-safety-green" />
-				<span className="text-sm font-medium text-safety-green">
-					All Clear — Full PPE Compliance
-				</span>
-			</motion.div>
-		);
-	if (level === "potential")
-		return (
-			<motion.div
-				initial={{ opacity: 0 }}
-				animate={{ opacity: 1 }}
-				className="flex items-center gap-2 rounded-lg bg-safety-orange/10 border border-safety-orange/30 px-4 py-3"
-			>
-				<AlertTriangle className="h-5 w-5 text-safety-orange" />
-				<span className="text-sm font-medium text-safety-orange">
-					Potential Violation — Confirming...
-				</span>
-			</motion.div>
-		);
-	return (
-		<motion.div
-			initial={{ opacity: 0 }}
-			animate={{ opacity: 1 }}
-			className="flex items-center gap-2 rounded-lg bg-safety-red/10 border border-safety-red/30 px-4 py-3 animate-pulse-glow"
-		>
-			<ShieldAlert className="h-5 w-5 text-safety-red" />
-			<span className="text-sm font-medium text-safety-red">
-				⚠ CONFIRMED BREACH — Missing PPE Detected
-			</span>
-		</motion.div>
-	);
-}
-
-function ImageResult({ detections }: { detections: Detection[] }) {
-	const hasViolation = detections.some((d) => d.is_violation);
-	const alertLevel: AlertLevel = hasViolation ? "confirmed" : "clear";
-
-	return (
-		<motion.div
-			initial={{ y: 10, opacity: 0 }}
-			animate={{ y: 0, opacity: 1 }}
-			className="space-y-4"
-		>
-			<AlertBanner level={alertLevel} />
-			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-				<Card>
-					<CardContent className="p-0">
-						<div className="relative bg-muted rounded-lg aspect-video flex items-center justify-center overflow-hidden">
-							<div className="absolute inset-0 bg-gradient-to-br from-muted to-secondary/50" />
-							{detections.map((det, i) => {
-								const cls = PPE_CLASSES.find((c) => c.name === det.class_name);
-								return (
-									<motion.div
-										key={i}
-										initial={{ opacity: 0, scale: 0.8 }}
-										animate={{ opacity: 1, scale: 1 }}
-										transition={{ delay: i * 0.1 }}
-										className="absolute border-2 rounded-sm"
-										style={{
-											borderColor: cls?.color || "#fff",
-											left: `${(det.bbox[0] / 640) * 100}%`,
-											top: `${(det.bbox[1] / 640) * 100}%`,
-											width: `${((det.bbox[2] - det.bbox[0]) / 640) * 100}%`,
-											height: `${((det.bbox[3] - det.bbox[1]) / 640) * 100}%`,
-										}}
-									>
-										<span
-											className="absolute -top-5 left-0 text-[9px] px-1 rounded font-mono"
-											style={{ backgroundColor: cls?.color, color: "#fff" }}
-										>
-											{det.class_name} {(det.confidence * 100).toFixed(0)}%
-										</span>
-									</motion.div>
-								);
-							})}
-							<span className="relative z-10 text-xs text-muted-foreground">
-								Annotated Preview
-							</span>
-						</div>
-					</CardContent>
-				</Card>
-
-				<Card>
-					<CardHeader className="pb-2">
-						<CardTitle className="text-sm">
-							Detections ({detections.length})
-						</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead className="text-xs">Class</TableHead>
-									<TableHead className="text-xs">Confidence</TableHead>
-									<TableHead className="text-xs">Status</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{detections.map((det, i) => {
-									const cls = PPE_CLASSES.find(
-										(c) => c.name === det.class_name,
-									);
-									return (
-										<TableRow key={i}>
-											<TableCell className="py-2">
-												<div className="flex items-center gap-2">
-													<div
-														className="h-2.5 w-2.5 rounded-full"
-														style={{ backgroundColor: cls?.color }}
-													/>
-													<span className="text-xs font-medium">
-														{det.class_name}
-													</span>
-												</div>
-											</TableCell>
-											<TableCell className="py-2">
-												<span className="text-xs font-mono">
-													{(det.confidence * 100).toFixed(1)}%
-												</span>
-											</TableCell>
-											<TableCell className="py-2">
-												{det.is_violation ? (
-													<Badge variant="destructive" className="text-[10px]">
-														Violation
-													</Badge>
-												) : (
-													<Badge
-														variant="outline"
-														className="text-[10px] border-safety-green/30 text-safety-green"
-													>
-														OK
-													</Badge>
-												)}
-											</TableCell>
-										</TableRow>
-									);
-								})}
-							</TableBody>
-						</Table>
-					</CardContent>
-				</Card>
-			</div>
-		</motion.div>
-	);
-}
-
+// Video Result Component
 function VideoResult({ file }: { file: File }) {
 	const [progress, setProgress] = useState(0);
 	const [processing, setProcessing] = useState(false);
 	const [resultMessage, setResultMessage] = useState("");
-	const { metrics, refreshData } = usePPE();
+	const { metrics, uploadVideo, refreshData } = usePPE();
 	const fileUrl = useRef(URL.createObjectURL(file));
 
-	// Remove the mock timer and replace with an API call
 	useEffect(() => {
 		let active = true;
 		const currentUrl = fileUrl.current;
-		const processVideo = async () => {
+
+		const process = async () => {
 			setProcessing(true);
 			setProgress(10);
 			try {
-				const formData = new FormData();
-				formData.append("file", file);
 				setProgress(30);
-				const res = await fetch(`${API_BASE}/detect/video`, {
-					method: "POST",
-					body: formData,
-				});
-				setProgress(80);
-				if (res.ok) {
-					const data = await res.json();
-					if (active) {
-						setResultMessage(
-							`Processed ${data.frames_processed} frames. Found ${data.alerts_count} alerts.`,
-						);
-					}
+				await uploadVideo(file);
+				if (active) {
+					setResultMessage("Video processing complete");
 				}
 			} catch (e) {
 				console.error("Video processing failed", e);
-			}
-			if (active) {
-				setProgress(100);
-				setProcessing(false);
-				refreshData();
+			} finally {
+				if (active) {
+					setProgress(100);
+					setProcessing(false);
+					refreshData();
+				}
 			}
 		};
-		processVideo();
+
+		process();
 		return () => {
 			active = false;
 			URL.revokeObjectURL(currentUrl);
 		};
-	}, [file, refreshData]);
+	}, [file, uploadVideo, refreshData]);
 
-	// Derived alert level from total metrics for demonstration
-	const recentAlerts = metrics.confirmed_alerts;
-	const hasBreach = recentAlerts > 0;
+	const hasBreach = metrics.confirmed_alerts > 0;
+
+	const getAlertLevel = (): AlertLevel => {
+		if (hasBreach) return "confirmed";
+		if (processing) return "potential";
+		return "clear";
+	};
 
 	return (
 		<motion.div
@@ -288,9 +69,7 @@ function VideoResult({ file }: { file: File }) {
 			animate={{ y: 0, opacity: 1 }}
 			className="space-y-4"
 		>
-			{hasBreach && <AlertBanner level="confirmed" />}
-			{!hasBreach && processing && <AlertBanner level="potential" />}
-			{!hasBreach && !processing && <AlertBanner level="clear" />}
+			<AlertBanner level={getAlertLevel()} />
 
 			<div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 				<div className="lg:col-span-2">
@@ -365,34 +144,126 @@ function VideoResult({ file }: { file: File }) {
 	);
 }
 
+// Image Result Component
+function ImageResult({
+	detections,
+	imageUrl,
+	imageDimensions,
+}: {
+	detections: Detection[];
+	imageUrl?: string;
+	imageDimensions?: { width: number; height: number } | null;
+}) {
+	const hasViolation = detections.some((d) => d.is_violation);
+	const alertLevel: AlertLevel = hasViolation ? "confirmed" : "clear";
+
+	return (
+		<motion.div
+			initial={{ y: 10, opacity: 0 }}
+			animate={{ y: 0, opacity: 1 }}
+			className="space-y-4"
+		>
+			<AlertBanner level={alertLevel} />
+			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+				<Card>
+					<CardContent className="p-0">
+						<ImagePreview
+							detections={detections}
+							imageUrl={imageUrl}
+							imageDimensions={imageDimensions}
+						/>
+					</CardContent>
+				</Card>
+
+				<Card>
+					<CardHeader className="pb-2">
+						<CardTitle className="text-sm">
+							Detections ({detections.length})
+						</CardTitle>
+					</CardHeader>
+					<CardContent>
+						<DetectionTable detections={detections} />
+					</CardContent>
+				</Card>
+			</div>
+		</motion.div>
+	);
+}
+
+// Main Detection Page
+const STORAGE_KEY = "ppe_detection_state";
+
+interface SavedDetectionState {
+	mediaType: MediaType | "none";
+	detections: Detection[];
+	imageUrl: string | null;
+	timestamp: number;
+}
+
 export default function DetectionPage() {
-	const [mediaType, setMediaType] = useState<MediaType>("none");
+	const [mediaType, setMediaType] = useState<MediaType | "none">("none");
 	const [detections, setDetections] = useState<Detection[]>([]);
 	const [currentFile, setCurrentFile] = useState<File | null>(null);
-	const { config, refreshData } = usePPE();
+	const [imageUrl, setImageUrl] = useState<string | null>(null);
+	const { config, uploadImage, imageDimensions } = usePPE();
+
+	// Load persisted state on mount
+	useEffect(() => {
+		const saved = localStorage.getItem(STORAGE_KEY);
+		if (saved) {
+			try {
+				const state: SavedDetectionState = JSON.parse(saved);
+				// Only restore if less than 30 minutes old
+				const isRecent = Date.now() - state.timestamp < 30 * 60 * 1000;
+				if (isRecent && state.imageUrl) {
+					setMediaType(state.mediaType);
+					setDetections(state.detections);
+					setImageUrl(state.imageUrl);
+				}
+			} catch {
+				// Ignore parse errors
+			}
+		}
+	}, []);
+
+	// Persist state when detection data changes
+	useEffect(() => {
+		if (mediaType === "image" && imageUrl) {
+			const state: SavedDetectionState = {
+				mediaType,
+				detections,
+				imageUrl,
+				timestamp: Date.now(),
+			};
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+		}
+	}, [mediaType, detections, imageUrl]);
 
 	const handleFileSelect = async (type: MediaType, file?: File) => {
 		setMediaType(type);
 		setCurrentFile(file || null);
+
 		if (file && type === "image") {
-			try {
-				const formData = new FormData();
-				formData.append("file", file);
-				const res = await fetch(`${API_BASE}/detect/image`, {
-					method: "POST",
-					body: formData,
-				});
-				if (res.ok) {
-					const data = await res.json();
-					setDetections(data.detections || []);
-					refreshData(); // get updated metrics/incidents
-				} else {
-					setDetections([]);
-				}
-			} catch (err) {
-				console.error("Backend connection failed", err);
+			const url = URL.createObjectURL(file);
+			setImageUrl(url);
+
+			const result = await uploadImage(file);
+			if (result) {
+				setDetections(result.detections || []);
+			} else {
 				setDetections([]);
 			}
+		}
+	};
+
+	const handleBack = () => {
+		setMediaType("none");
+		setCurrentFile(null);
+		setDetections([]);
+		localStorage.removeItem(STORAGE_KEY);
+		if (imageUrl) {
+			URL.revokeObjectURL(imageUrl);
+			setImageUrl(null);
 		}
 	};
 
@@ -435,15 +306,16 @@ export default function DetectionPage() {
 								variant="ghost"
 								size="sm"
 								className="text-xs"
-								onClick={() => {
-									setMediaType("none");
-									setCurrentFile(null);
-								}}
+								onClick={handleBack}
 							>
 								← Back
 							</Button>
 						</div>
-						<ImageResult detections={detections} />
+						<ImageResult
+							detections={detections}
+							imageUrl={imageUrl || undefined}
+							imageDimensions={imageDimensions}
+						/>
 					</motion.div>
 				)}
 				{mediaType === "video" && currentFile && (
@@ -457,10 +329,7 @@ export default function DetectionPage() {
 								variant="ghost"
 								size="sm"
 								className="text-xs"
-								onClick={() => {
-									setMediaType("none");
-									setCurrentFile(null);
-								}}
+								onClick={handleBack}
 							>
 								← Back
 							</Button>
