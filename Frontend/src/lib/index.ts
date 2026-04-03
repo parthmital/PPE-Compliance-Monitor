@@ -12,6 +12,11 @@ export {
 export { fetchConfig, updateThresholds, reloadModel } from "./config-api";
 export { fetchMetrics } from "./metrics-api";
 export {
+	fetchSessionState,
+	saveSessionState,
+	clearSessionState,
+} from "./detection-api";
+export {
 	formatClassName,
 	PPE_CLASSES,
 	type Detection,
@@ -23,4 +28,5 @@ export {
 	type SavedDetectionState,
 	type SavedVideoState,
 	type VideoJobStatus,
+	type SessionState,
 } from "./ppe-types";

@@ -23,10 +23,14 @@ import {
 	type MediaType,
 	type AlertLevel,
 } from "@/components";
-import type { Detection, SavedDetectionState, SavedVideoState } from "@/lib";
+import type { Detection } from "@/lib";
 
-// Video Result Component
-function VideoResult({ file }: { file: File }) {
+// STORAGE_KEYS - kept for reference but no longer used (migrated to backend)
+// const STORAGE_KEYS = {
+// 	DETECTION_PAGE: "ppe_detection_page",
+// } as const;
+
+function VideoResult({ file }: { file: File | null }) {
 	const [resultMessage, setResultMessage] = useState("");
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [currentTime, setCurrentTime] = useState(0);
@@ -45,13 +49,18 @@ function VideoResult({ file }: { file: File }) {
 		setVideoProcessing,
 		setVideoProgress,
 	} = usePPE();
-	const fileUrl = useRef(URL.createObjectURL(file));
+	const fileUrl = useRef<string | null>(
+		file ? URL.createObjectURL(file) : null,
+	);
 	const videoRef = useRef<HTMLVideoElement>(null);
 	const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+	const hasStartedRef = useRef(false);
 
 	// Get video metadata (total frames estimate)
 	useEffect(() => {
+		if (!file || !fileUrl.current) return;
+
 		const video = document.createElement("video");
 		video.preload = "metadata";
 		video.src = fileUrl.current;
@@ -72,6 +81,10 @@ function VideoResult({ file }: { file: File }) {
 	}, [file, setVideoProgress]);
 
 	useEffect(() => {
+		// Only start processing if we have a file and haven't started yet
+		if (!file || hasStartedRef.current) return;
+
+		hasStartedRef.current = true;
 		let active = true;
 		const currentUrl = fileUrl.current;
 
@@ -119,7 +132,9 @@ function VideoResult({ file }: { file: File }) {
 			if (pollIntervalRef.current) {
 				clearInterval(pollIntervalRef.current);
 			}
-			URL.revokeObjectURL(currentUrl);
+			if (currentUrl) {
+				URL.revokeObjectURL(currentUrl);
+			}
 		};
 	}, [
 		file,
@@ -240,15 +255,25 @@ function VideoResult({ file }: { file: File }) {
 								onMouseMove={handleMouseMove}
 								onMouseLeave={() => isPlaying && setShowControls(false)}
 							>
-								<video
-									ref={videoRef}
-									src={fileUrl.current}
-									className="absolute inset-0 w-full h-full object-contain"
-									onTimeUpdate={handleTimeUpdate}
-									onLoadedMetadata={handleLoadedMetadata}
-									onEnded={() => setIsPlaying(false)}
-									onClick={togglePlay}
-								/>
+								{fileUrl.current ? (
+									<video
+										ref={videoRef}
+										src={fileUrl.current}
+										className="absolute inset-0 w-full h-full object-contain"
+										onTimeUpdate={handleTimeUpdate}
+										onLoadedMetadata={handleLoadedMetadata}
+										onEnded={() => setIsPlaying(false)}
+										onClick={togglePlay}
+									/>
+								) : (
+									<div className="flex flex-col items-center justify-center text-muted-foreground">
+										<Video className="h-16 w-16 mb-4 opacity-50" />
+										<p className="text-sm">Video file not available</p>
+										<p className="text-xs opacity-70">
+											Processing continues in background
+										</p>
+									</div>
+								)}
 
 								{/* Processing Overlay */}
 								{processing && (
@@ -288,7 +313,7 @@ function VideoResult({ file }: { file: File }) {
 								)}
 
 								{/* Center Play Button (when paused) */}
-								{!isPlaying && !processing && (
+								{!isPlaying && !processing && fileUrl.current && (
 									<div className="absolute inset-0 flex items-center justify-center z-10 bg-black/40">
 										<button
 											onClick={togglePlay}
@@ -300,62 +325,64 @@ function VideoResult({ file }: { file: File }) {
 								)}
 
 								{/* Video Controls */}
-								<div
-									className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 transition-opacity duration-300 z-20 ${
-										showControls ? "opacity-100" : "opacity-0"
-									}`}
-								>
-									{/* Seek Bar */}
-									<div className="mb-3">
-										<input
-											type="range"
-											min={0}
-											max={duration || 100}
-											value={currentTime}
-											onChange={handleSeekBarChange}
-											className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer hover:bg-white/50"
-											style={{
-												background: `linear-gradient(to right, #ef4444 ${(currentTime / (duration || 1)) * 100}%, rgba(255,255,255,0.3) ${(currentTime / (duration || 1)) * 100}%)`,
-											}}
-										/>
-									</div>
-
-									{/* Control Buttons */}
-									<div className="flex items-center justify-between">
-										<div className="flex items-center gap-2">
-											<button
-												onClick={togglePlay}
-												className="w-10 h-10 rounded-full bg-white/90 hover:bg-white flex items-center justify-center transition-all"
-											>
-												{isPlaying ? (
-													<Pause className="h-5 w-5 text-black" />
-												) : (
-													<Play className="h-5 w-5 text-black ml-0.5" />
-												)}
-											</button>
-
-											<button
-												onClick={() => handleSeek(-10)}
-												className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition-all"
-												title="Rewind 10s"
-											>
-												<RotateCcw className="h-4 w-4 text-white" />
-											</button>
-
-											<button
-												onClick={() => handleSeek(10)}
-												className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition-all"
-												title="Forward 10s"
-											>
-												<RotateCw className="h-4 w-4 text-white" />
-											</button>
+								{fileUrl.current && (
+									<div
+										className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 transition-opacity duration-300 z-20 ${
+											showControls ? "opacity-100" : "opacity-0"
+										}`}
+									>
+										{/* Seek Bar */}
+										<div className="mb-3">
+											<input
+												type="range"
+												min={0}
+												max={duration || 100}
+												value={currentTime}
+												onChange={handleSeekBarChange}
+												className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer hover:bg-white/50"
+												style={{
+													background: `linear-gradient(to right, #ef4444 ${(currentTime / (duration || 1)) * 100}%, rgba(255,255,255,0.3) ${(currentTime / (duration || 1)) * 100}%)`,
+												}}
+											/>
 										</div>
 
-										<div className="text-white text-xs font-mono">
-											{formatTime(currentTime)} / {formatTime(duration)}
+										{/* Control Buttons */}
+										<div className="flex items-center justify-between">
+											<div className="flex items-center gap-2">
+												<button
+													onClick={togglePlay}
+													className="w-10 h-10 rounded-full bg-white/90 hover:bg-white flex items-center justify-center transition-all"
+												>
+													{isPlaying ? (
+														<Pause className="h-5 w-5 text-black" />
+													) : (
+														<Play className="h-5 w-5 text-black ml-0.5" />
+													)}
+												</button>
+
+												<button
+													onClick={() => handleSeek(-10)}
+													className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition-all"
+													title="Rewind 10s"
+												>
+													<RotateCcw className="h-4 w-4 text-white" />
+												</button>
+
+												<button
+													onClick={() => handleSeek(10)}
+													className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/40 flex items-center justify-center transition-all"
+													title="Forward 10s"
+												>
+													<RotateCw className="h-4 w-4 text-white" />
+												</button>
+											</div>
+
+											<div className="text-white text-xs font-mono">
+												{formatTime(currentTime)} / {formatTime(duration)}
+											</div>
 										</div>
 									</div>
-								</div>
+								)}
 							</div>
 
 							{/* Processing Progress */}
@@ -424,11 +451,13 @@ function ImageResult({
 	imageUrl,
 	imageDimensions,
 	isProcessing,
+	fileName,
 }: {
 	detections: Detection[];
 	imageUrl?: string;
 	imageDimensions?: { width: number; height: number } | null;
 	isProcessing?: boolean;
+	fileName?: string | null;
 }) {
 	const hasViolation = detections.some((d) => d.is_violation);
 	const alertLevel: AlertLevel = isProcessing
@@ -453,11 +482,23 @@ function ImageResult({
 			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
 				<Card>
 					<CardContent className="p-0">
-						<ImagePreview
-							detections={detections}
-							imageUrl={imageUrl}
-							imageDimensions={imageDimensions}
-						/>
+						{imageUrl ? (
+							<ImagePreview
+								detections={detections}
+								imageUrl={imageUrl}
+								imageDimensions={imageDimensions}
+							/>
+						) : (
+							<div className="flex flex-col items-center justify-center bg-muted/30 rounded-lg aspect-video text-muted-foreground">
+								<ImageIcon className="h-16 w-16 mb-4 opacity-50" />
+								<p className="text-sm">
+									{fileName ? fileName : "Image not available"}
+								</p>
+								<p className="text-xs opacity-70 mt-1">
+									Detection results preserved below
+								</p>
+							</div>
+						)}
 					</CardContent>
 				</Card>
 
@@ -486,19 +527,9 @@ function ImageResult({
 }
 
 // Main Detection Page
-const STORAGE_KEY = "ppe_detection_state";
-const VIDEO_STORAGE_KEY = "ppe_video_state";
-
 export default function DetectionPage() {
-	const [mediaType, setMediaType] = useState<MediaType | "none">("none");
-	const [detections, setDetections] = useState<Detection[]>([]);
-	const [currentFile, setCurrentFile] = useState<File | null>(null);
-	const [restoredVideoInfo, setRestoredVideoInfo] =
-		useState<SavedVideoState | null>(null);
-	const [imageUrl, setImageUrl] = useState<string | null>(null);
-	const [isImageProcessing, setIsImageProcessing] = useState(false);
+	// Use PPEContext for persistent state
 	const {
-		config,
 		uploadImage,
 		imageDimensions,
 		videoProcessing,
@@ -508,104 +539,94 @@ export default function DetectionPage() {
 		videoAlertsFound,
 		setVideoProcessing,
 		metrics,
+		// Detection page state from context
+		detectionMediaType,
+		detectionDetections,
+		detectionImageFileName,
+		detectionVideoFileName,
+		detectionIsImageProcessing,
+		// Detection page actions
+		setDetectionState,
+		clearDetectionState,
+		// Session persistence
+		saveSession,
 	} = usePPE();
+	// Non-persisted state for File objects (cannot serialize to backend)
+	const [currentFile, setCurrentFile] = useState<File | null>(null);
+	// Local state for image URL (object URL - cannot be persisted)
+	const [imageUrl, setImageUrl] = useState<string | null>(null);
+	const { config } = usePPE();
 
-	// Load persisted state on mount
+	// Restore file from filename if needed (on mount)
 	useEffect(() => {
-		const saved = localStorage.getItem(STORAGE_KEY);
-		if (saved) {
-			try {
-				const state: SavedDetectionState = JSON.parse(saved);
-				// Only restore if less than 30 minutes old
-				const isRecent = Date.now() - state.timestamp < 30 * 60 * 1000;
-				if (isRecent && state.imageUrl) {
-					setMediaType(state.mediaType);
-					setDetections(state.detections);
-					setImageUrl(state.imageUrl);
-				}
-			} catch {
-				// Ignore parse errors
-			}
-		}
-
-		// Check for persisted video state
-		const savedVideo = localStorage.getItem(VIDEO_STORAGE_KEY);
-		if (savedVideo) {
-			try {
-				const videoState: SavedVideoState = JSON.parse(savedVideo);
-				const isRecent = Date.now() - videoState.timestamp < 30 * 60 * 1000;
-				// Restore video mode if there was a recent video (regardless of processing state)
-				if (isRecent) {
-					// Show video mode - processing state will be restored by PPEContext
-					setMediaType("video");
-					setRestoredVideoInfo(videoState);
-				}
-			} catch {
-				// Ignore parse errors
-			}
-		}
+		// If we have a video filename but no file, the video state is in PPEContext
+		// The VideoResult component will need to handle this case
+		// For now, we keep the video state in PPEContext which is already persisted
 	}, []);
 
-	// Persist state when detection data changes
-	useEffect(() => {
-		if (mediaType === "image" && imageUrl && !isImageProcessing) {
-			const state: SavedDetectionState = {
-				mediaType,
-				detections,
-				imageUrl,
-				timestamp: Date.now(),
-			};
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-		}
-	}, [mediaType, detections, imageUrl, isImageProcessing]);
-
 	const handleFileSelect = async (type: MediaType, file?: File) => {
-		setMediaType(type);
 		setCurrentFile(file || null);
-		setDetections([]);
 
 		if (file && type === "image") {
 			const url = URL.createObjectURL(file);
 			setImageUrl(url);
-			setIsImageProcessing(true);
+			setDetectionState({
+				mediaType: type,
+				detections: [],
+				imageFileName: file.name,
+				videoFileName: null,
+				isImageProcessing: true,
+			});
 
 			const result = await uploadImage(file);
 			if (result) {
-				setDetections(result.detections || []);
+				setDetectionState({
+					detections: result.detections || [],
+					isImageProcessing: false,
+				});
+				// Immediately save session to persist detections
+				await saveSession();
 			} else {
-				setDetections([]);
+				setDetectionState({
+					detections: [],
+					isImageProcessing: false,
+				});
 			}
-			setIsImageProcessing(false);
-		}
-
-		if (file && type === "video") {
-			// Persist video file metadata
-			const videoState: SavedVideoState = {
-				fileName: file.name,
-				fileSize: file.size,
-				fileType: file.type,
-				timestamp: Date.now(),
-			};
-			localStorage.setItem(VIDEO_STORAGE_KEY, JSON.stringify(videoState));
+		} else if (file && type === "video") {
+			setImageUrl(null);
+			setDetectionState({
+				mediaType: type,
+				detections: [],
+				imageFileName: null,
+				videoFileName: file.name,
+				isImageProcessing: false,
+			});
+		} else {
+			setImageUrl(null);
+			clearDetectionState();
 		}
 	};
 
 	const handleBack = () => {
-		setMediaType("none");
-		setCurrentFile(null);
-		setRestoredVideoInfo(null);
-		setDetections([]);
-		localStorage.removeItem(STORAGE_KEY);
-		localStorage.removeItem(VIDEO_STORAGE_KEY);
-		// Only clear video processing state when explicitly going back
-		setVideoProcessing(false);
-		localStorage.removeItem("ppe_video_processing");
-		localStorage.removeItem("ppe_video_progress");
+		// Revoke object URL if exists
 		if (imageUrl) {
 			URL.revokeObjectURL(imageUrl);
-			setImageUrl(null);
 		}
+		setImageUrl(null);
+		clearDetectionState();
+		setCurrentFile(null);
+		// Clear video processing state when explicitly going back
+		setVideoProcessing(false);
 	};
+
+	const mediaType = detectionMediaType;
+	const detections = detectionDetections;
+	const isImageProcessing = detectionIsImageProcessing;
+
+	const hasVideoProcessing =
+		videoProcessing || videoProgress > 0 || videoFramesProcessed > 0;
+	const showVideo =
+		mediaType === "video" && (currentFile || hasVideoProcessing);
 
 	return (
 		<div className="space-y-6">
@@ -635,7 +656,7 @@ export default function DetectionPage() {
 						<DropZone onFileSelect={handleFileSelect} />
 					</motion.div>
 				)}
-				{mediaType === "image" && imageUrl && (
+				{mediaType === "image" && (
 					<motion.div key="image">
 						<div className="flex items-center justify-between mb-4">
 							<Badge variant="outline" className="gap-1">
@@ -656,20 +677,16 @@ export default function DetectionPage() {
 							imageUrl={imageUrl || undefined}
 							imageDimensions={imageDimensions}
 							isProcessing={isImageProcessing}
+							fileName={detectionImageFileName}
 						/>
 					</motion.div>
 				)}
-				{mediaType === "video" && (currentFile || restoredVideoInfo) && (
+				{mediaType === "video" && showVideo && (
 					<motion.div key="video">
 						<div className="flex items-center justify-between mb-4">
 							<Badge variant="outline" className="gap-1">
 								<Video className="h-3 w-3" />
 								Video Mode
-								{restoredVideoInfo && !currentFile && (
-									<span className="ml-2 text-xs text-muted-foreground">
-										({restoredVideoInfo.fileName})
-									</span>
-								)}
 							</Badge>
 							<Button
 								variant="ghost"
@@ -680,65 +697,7 @@ export default function DetectionPage() {
 								← Back
 							</Button>
 						</div>
-						{currentFile ? (
-							<VideoResult file={currentFile} />
-						) : restoredVideoInfo ? (
-							// Show processing status when returning without file
-							<motion.div
-								initial={{ y: 10, opacity: 0 }}
-								animate={{ y: 0, opacity: 1 }}
-								className="space-y-4"
-							>
-								<AlertBanner
-									level={metrics.confirmed_alerts > 0 ? "confirmed" : "clear"}
-								/>
-								<Card>
-									<CardHeader className="pb-2">
-										<CardTitle className="text-sm flex items-center gap-2">
-											<Video className="h-4 w-4" />
-											{restoredVideoInfo.fileName}
-										</CardTitle>
-									</CardHeader>
-									<CardContent className="p-6">
-										<div className="space-y-4">
-											<div className="flex items-center gap-2 text-sm">
-												{videoProcessing ? (
-													<>
-														<Loader2 className="h-4 w-4 animate-spin text-safety-orange" />
-														<span>Processing video in background...</span>
-													</>
-												) : (
-													<>
-														<CheckCircle2 className="h-4 w-4 text-safety-green" />
-														<span>Processing complete</span>
-													</>
-												)}
-											</div>
-											<Progress value={videoProgress} className="h-2" />
-											<div className="flex justify-between text-xs text-muted-foreground">
-												<span>
-													Frame {videoFramesProcessed.toLocaleString()} /{" "}
-													{videoTotalFrames.toLocaleString()}
-												</span>
-												<span>{videoProgress.toFixed(0)}%</span>
-											</div>
-											<div className="text-xs">
-												Alerts found:{" "}
-												<span className="font-mono text-safety-red">
-													{videoAlertsFound}
-												</span>
-											</div>
-											{!videoProcessing && (
-												<div className="pt-2 border-t text-xs text-muted-foreground">
-													Video file no longer available for replay. Upload
-													again to view.
-												</div>
-											)}
-										</div>
-									</CardContent>
-								</Card>
-							</motion.div>
-						) : null}
+						<VideoResult file={currentFile} />
 					</motion.div>
 				)}
 			</AnimatePresence>

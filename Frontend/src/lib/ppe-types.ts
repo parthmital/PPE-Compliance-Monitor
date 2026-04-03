@@ -135,6 +135,32 @@ export interface VideoJobStatus {
 	error_message?: string;
 }
 
+// Session state for backend persistence
+export interface SessionState {
+	config: {
+		confidence_threshold: number;
+		nms_iou_threshold: number;
+		is_dark_mode: boolean;
+	};
+	video_progress: {
+		processing: boolean;
+		progress: number;
+		frames_processed: number;
+		total_frames: number;
+		alerts_found: number;
+		video_filename: string | null;
+		job_id: string | null;
+	};
+	detection_page: {
+		media_type: "image" | "video" | "none";
+		detections: Detection[];
+		image_filename: string | null;
+		video_filename: string | null;
+		is_image_processing: boolean;
+	};
+	last_updated?: string;
+}
+
 // Helper to format class names for display
 export function formatClassName(name: string): string {
 	// Replace hyphens with spaces

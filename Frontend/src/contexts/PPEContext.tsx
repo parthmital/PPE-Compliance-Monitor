@@ -18,6 +18,9 @@ import {
 	detectImage,
 	startVideoProcessing,
 	getVideoJobStatus,
+	fetchSessionState,
+	saveSessionState,
+	clearSessionState,
 } from "@/lib";
 import type {
 	AppConfig,
@@ -26,7 +29,12 @@ import type {
 	DetectionResponse,
 	VideoProgressState,
 	VideoJobStatus,
+	SessionState,
+	Detection,
 } from "@/lib";
+
+// STORAGE: All state is instantly persisted to the backend data folder via API
+// Every state change is immediately saved - no periodic/batch saving
 
 interface PPEContextValue {
 	// State
@@ -45,6 +53,13 @@ interface PPEContextValue {
 	videoTotalFrames: number;
 	videoAlertsFound: number;
 
+	// Detection Page State (persisted)
+	detectionMediaType: "image" | "video" | "none";
+	detectionDetections: Detection[];
+	detectionImageFileName: string | null;
+	detectionVideoFileName: string | null;
+	detectionIsImageProcessing: boolean;
+
 	// Actions
 	setConfig: (partial: Partial<AppConfig>) => Promise<void>;
 	uploadModel: (file: File) => Promise<boolean>;
@@ -57,6 +72,23 @@ interface PPEContextValue {
 	toggleDarkMode: () => void;
 	setVideoProcessing: (processing: boolean) => void;
 	setVideoProgress: (progress: VideoProgressState) => void;
+
+	// Detection page actions
+	setDetectionState: (
+		state: Partial<{
+			mediaType: "image" | "video" | "none";
+			detections: Detection[];
+			imageFileName: string | null;
+			videoFileName: string | null;
+			isImageProcessing: boolean;
+		}>,
+	) => void;
+	clearDetectionState: () => void;
+
+	// Session state persistence
+	loadSession: () => Promise<void>;
+	saveSession: () => Promise<void>;
+	clearSession: () => Promise<void>;
 }
 
 const defaultConfig: AppConfig = {
@@ -77,10 +109,34 @@ const defaultMetrics: SessionMetrics = {
 	persons_detected: 0,
 };
 
+const defaultSessionState: SessionState = {
+	config: {
+		confidence_threshold: 0.4,
+		nms_iou_threshold: 0.45,
+		is_dark_mode: true,
+	},
+	video_progress: {
+		processing: false,
+		progress: 0,
+		frames_processed: 0,
+		total_frames: 0,
+		alerts_found: 0,
+		video_filename: null,
+		job_id: null,
+	},
+	detection_page: {
+		media_type: "none",
+		detections: [],
+		image_filename: null,
+		video_filename: null,
+		is_image_processing: false,
+	},
+};
+
 const PPEContext = createContext<PPEContextValue | null>(null);
 
 export function PPEProvider({ children }: { children: React.ReactNode }) {
-	// State
+	// State - all persisted instantly to backend data folder via useEffect
 	const [config, setConfigState] = useState<AppConfig>(defaultConfig);
 	const [metrics, setMetricsState] = useState<SessionMetrics>(defaultMetrics);
 	const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -88,16 +144,46 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 		width: number;
 		height: number;
 	} | null>(null);
-	const [isDarkMode, setIsDarkMode] = useState(true);
+	const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
 	const [isLoading, setIsLoading] = useState(false);
 	const [sessionStart] = useState(() => new Date());
 
-	// Video Processing State
-	const [videoProcessing, setVideoProcessing] = useState(false);
-	const [videoProgress, setVideoProgressState] = useState(0);
-	const [videoFramesProcessed, setVideoFramesProcessed] = useState(0);
-	const [videoTotalFrames, setVideoTotalFrames] = useState(0);
-	const [videoAlertsFound, setVideoAlertsFound] = useState(0);
+	// Video Processing State - using useState with backend persistence
+	const [videoProgressState, setVideoProgressState] = useState<{
+		processing: boolean;
+		progress: number;
+		framesProcessed: number;
+		totalFrames: number;
+		alertsFound: number;
+		jobId: string | null;
+		videoFileName: string | null;
+		videoFileType: string | null;
+	}>({
+		processing: false,
+		progress: 0,
+		framesProcessed: 0,
+		totalFrames: 0,
+		alertsFound: 0,
+		jobId: null,
+		videoFileName: null,
+		videoFileType: null,
+	});
+
+	// Detection Page State - using useState with backend persistence
+	const [detectionMediaType, setDetectionMediaType] = useState<
+		"image" | "video" | "none"
+	>("none");
+	const [detectionDetections, setDetectionDetections] = useState<Detection[]>(
+		[],
+	);
+	const [detectionImageFileName, setDetectionImageFileName] = useState<
+		string | null
+	>(null);
+	const [detectionVideoFileName, setDetectionVideoFileName] = useState<
+		string | null
+	>(null);
+	const [detectionIsImageProcessing, setDetectionIsImageProcessing] =
+		useState(false);
 
 	// Video job polling refs
 	const jobPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -124,13 +210,6 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			console.error("Failed to refresh data:", error);
 		}
 	}, []);
-
-	// Initial data load and polling
-	useEffect(() => {
-		refreshData();
-		const interval = setInterval(refreshData, 2000);
-		return () => clearInterval(interval);
-	}, [refreshData]);
 
 	// Update config with backend sync
 	const setConfig = useCallback(
@@ -209,36 +288,239 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 		try {
 			await clearIncidents();
 			setIncidents([]);
+			await refreshData(); // Refresh metrics after clearing
 			toast.success("All incidents cleared");
 		} catch (error) {
 			toast.error("Failed to clear incidents");
 		}
-	}, []);
+	}, [refreshData]);
 
 	// Toggle dark mode
 	const toggleDarkMode = useCallback(() => {
 		setIsDarkMode((prev) => !prev);
 	}, []);
 
-	// Video processing state setters
-	const setVideoProcessingState = useCallback((processing: boolean) => {
-		setVideoProcessing(processing);
-		// Persist to localStorage
-		if (processing) {
-			localStorage.setItem("ppe_video_processing", "true");
-		} else {
-			localStorage.removeItem("ppe_video_processing");
-			localStorage.removeItem("ppe_video_file");
+	// Session persistence functions
+	const loadSession = useCallback(async () => {
+		try {
+			const sessionState = await fetchSessionState();
+			if (sessionState.config) {
+				setConfigState((prev) => ({
+					...prev,
+					confidence_threshold: sessionState.config.confidence_threshold,
+					nms_iou_threshold: sessionState.config.nms_iou_threshold,
+				}));
+				setIsDarkMode(sessionState.config.is_dark_mode);
+			}
+			if (sessionState.video_progress) {
+				const jobId = sessionState.video_progress.job_id;
+				let isProcessing = sessionState.video_progress.processing;
+				let progress = sessionState.video_progress.progress;
+				let framesProcessed = sessionState.video_progress.frames_processed;
+				let totalFrames = sessionState.video_progress.total_frames;
+				let alertsFound = sessionState.video_progress.alerts_found;
+
+				// If session says processing, verify job status with backend
+				if (isProcessing && jobId) {
+					try {
+						const jobStatus = await getVideoJobStatus(jobId);
+						if (jobStatus.status === "completed") {
+							isProcessing = false;
+							progress = 100;
+							framesProcessed = jobStatus.frames_processed;
+							alertsFound = jobStatus.alerts_found;
+						} else if (jobStatus.status === "failed") {
+							isProcessing = false;
+							progress = 0;
+						} else if (
+							jobStatus.status === "processing" ||
+							jobStatus.status === "pending"
+						) {
+							// Job is actually still running, use latest data
+							progress = jobStatus.progress_percent;
+							framesProcessed = jobStatus.frames_processed;
+							totalFrames = jobStatus.total_frames;
+							alertsFound = jobStatus.alerts_found;
+						}
+					} catch {
+						// If job status check fails, assume job is done to avoid stuck state
+						isProcessing = false;
+					}
+				}
+
+				setVideoProgressState({
+					processing: isProcessing,
+					progress,
+					framesProcessed,
+					totalFrames,
+					alertsFound,
+					jobId,
+					videoFileName: sessionState.video_progress.video_filename,
+					videoFileType: null,
+				});
+			}
+			if (sessionState.detection_page) {
+				setDetectionMediaType(sessionState.detection_page.media_type);
+				setDetectionDetections(sessionState.detection_page.detections);
+				setDetectionImageFileName(sessionState.detection_page.image_filename);
+				setDetectionVideoFileName(sessionState.detection_page.video_filename);
+				setDetectionIsImageProcessing(
+					sessionState.detection_page.is_image_processing,
+				);
+			}
+		} catch (error) {
+			console.error("Failed to load session:", error);
 		}
 	}, []);
 
-	const setVideoProgress = useCallback((progress: VideoProgressState) => {
-		setVideoProgressState(progress.progress);
-		setVideoFramesProcessed(progress.framesProcessed);
-		setVideoTotalFrames(progress.totalFrames);
-		setVideoAlertsFound(progress.alertsFound);
-		// Persist progress
-		localStorage.setItem("ppe_video_progress", JSON.stringify(progress));
+	const saveSession = useCallback(async () => {
+		try {
+			const sessionState: SessionState = {
+				config: {
+					confidence_threshold: config.confidence_threshold,
+					nms_iou_threshold: config.nms_iou_threshold,
+					is_dark_mode: isDarkMode,
+				},
+				video_progress: {
+					processing: videoProgressState.processing,
+					progress: videoProgressState.progress,
+					frames_processed: videoProgressState.framesProcessed,
+					total_frames: videoProgressState.totalFrames,
+					alerts_found: videoProgressState.alertsFound,
+					video_filename: videoProgressState.videoFileName,
+					job_id: videoProgressState.jobId,
+				},
+				detection_page: {
+					media_type: detectionMediaType,
+					detections: detectionDetections,
+					image_filename: detectionImageFileName,
+					video_filename: detectionVideoFileName,
+					is_image_processing: detectionIsImageProcessing,
+				},
+			};
+			await saveSessionState(sessionState);
+		} catch (error) {
+			console.error("Failed to save session:", error);
+		}
+	}, [
+		config,
+		isDarkMode,
+		videoProgressState,
+		detectionMediaType,
+		detectionDetections,
+		detectionImageFileName,
+		detectionVideoFileName,
+		detectionIsImageProcessing,
+	]);
+
+	const clearSession = useCallback(async () => {
+		try {
+			await clearSessionState();
+			setConfigState(defaultConfig);
+			setIsDarkMode(true);
+			setVideoProgressState({
+				processing: false,
+				progress: 0,
+				framesProcessed: 0,
+				totalFrames: 0,
+				alertsFound: 0,
+				jobId: null,
+				videoFileName: null,
+				videoFileType: null,
+			});
+			setDetectionMediaType("none");
+			setDetectionDetections([]);
+			setDetectionImageFileName(null);
+			setDetectionVideoFileName(null);
+			setDetectionIsImageProcessing(false);
+		} catch (error) {
+			console.error("Failed to clear session:", error);
+		}
+	}, []);
+
+	// Initial data load
+	useEffect(() => {
+		refreshData();
+		// Load session state from backend on mount
+		loadSession();
+		const interval = setInterval(refreshData, 2000);
+		return () => clearInterval(interval);
+	}, [refreshData, loadSession]);
+
+	// Instant save session state whenever relevant state changes
+	useEffect(() => {
+		saveSession();
+	}, [
+		config.confidence_threshold,
+		config.nms_iou_threshold,
+		isDarkMode,
+		videoProgressState.processing,
+		videoProgressState.progress,
+		videoProgressState.framesProcessed,
+		videoProgressState.totalFrames,
+		videoProgressState.alertsFound,
+		videoProgressState.jobId,
+		videoProgressState.videoFileName,
+		detectionMediaType,
+		detectionDetections,
+		detectionImageFileName,
+		detectionVideoFileName,
+		detectionIsImageProcessing,
+		saveSession,
+	]);
+
+	// Video processing state setters
+	const setVideoProcessingState = useCallback(
+		(processing: boolean) => {
+			setVideoProgressState((prev) => ({ ...prev, processing }));
+		},
+		[setVideoProgressState],
+	);
+
+	const setVideoProgress = useCallback(
+		(progress: VideoProgressState) => {
+			setVideoProgressState((prev) => ({
+				...prev,
+				processing: progress.processing,
+				progress: progress.progress,
+				framesProcessed: progress.framesProcessed,
+				totalFrames: progress.totalFrames,
+				alertsFound: progress.alertsFound,
+			}));
+		},
+		[setVideoProgressState],
+	);
+
+	// Detection state management functions
+	const setDetectionState = useCallback(
+		(
+			state: Partial<{
+				mediaType: "image" | "video" | "none";
+				detections: Detection[];
+				imageFileName: string | null;
+				videoFileName: string | null;
+				isImageProcessing: boolean;
+			}>,
+		) => {
+			if (state.mediaType !== undefined) setDetectionMediaType(state.mediaType);
+			if (state.detections !== undefined)
+				setDetectionDetections(state.detections);
+			if (state.imageFileName !== undefined)
+				setDetectionImageFileName(state.imageFileName);
+			if (state.videoFileName !== undefined)
+				setDetectionVideoFileName(state.videoFileName);
+			if (state.isImageProcessing !== undefined)
+				setDetectionIsImageProcessing(state.isImageProcessing);
+		},
+		[],
+	);
+
+	const clearDetectionState = useCallback(() => {
+		setDetectionMediaType("none");
+		setDetectionDetections([]);
+		setDetectionImageFileName(null);
+		setDetectionVideoFileName(null);
+		setDetectionIsImageProcessing(false);
 	}, []);
 
 	// Upload video for detection (async with polling) - defined after setters
@@ -343,26 +625,6 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 		[refreshData, setVideoProcessingState, setVideoProgress],
 	);
 
-	// Restore video processing state on mount
-	useEffect(() => {
-		const saved = localStorage.getItem("ppe_video_processing");
-		if (saved === "true") {
-			const savedProgress = localStorage.getItem("ppe_video_progress");
-			if (savedProgress) {
-				try {
-					const progress: VideoProgressState = JSON.parse(savedProgress);
-					setVideoProcessing(true);
-					setVideoProgressState(progress.progress);
-					setVideoFramesProcessed(progress.framesProcessed);
-					setVideoTotalFrames(progress.totalFrames);
-					setVideoAlertsFound(progress.alertsFound);
-				} catch {
-					// Ignore parse errors
-				}
-			}
-		}
-	}, []);
-
 	// Memoize context value
 	const value = useMemo<PPEContextValue>(
 		() => ({
@@ -373,11 +635,16 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			isDarkMode,
 			sessionStart,
 			isLoading,
-			videoProcessing,
-			videoProgress,
-			videoFramesProcessed,
-			videoTotalFrames,
-			videoAlertsFound,
+			videoProcessing: videoProgressState.processing,
+			videoProgress: videoProgressState.progress,
+			videoFramesProcessed: videoProgressState.framesProcessed,
+			videoTotalFrames: videoProgressState.totalFrames,
+			videoAlertsFound: videoProgressState.alertsFound,
+			detectionMediaType,
+			detectionDetections,
+			detectionImageFileName,
+			detectionVideoFileName,
+			detectionIsImageProcessing,
 			setConfig,
 			uploadModel,
 			uploadImage,
@@ -387,6 +654,11 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			toggleDarkMode,
 			setVideoProcessing: setVideoProcessingState,
 			setVideoProgress,
+			setDetectionState,
+			clearDetectionState,
+			loadSession,
+			saveSession,
+			clearSession,
 		}),
 		[
 			config,
@@ -396,11 +668,12 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			isDarkMode,
 			sessionStart,
 			isLoading,
-			videoProcessing,
-			videoProgress,
-			videoFramesProcessed,
-			videoTotalFrames,
-			videoAlertsFound,
+			videoProgressState,
+			detectionMediaType,
+			detectionDetections,
+			detectionImageFileName,
+			detectionVideoFileName,
+			detectionIsImageProcessing,
 			setConfig,
 			uploadModel,
 			uploadImage,
@@ -410,6 +683,11 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			toggleDarkMode,
 			setVideoProcessingState,
 			setVideoProgress,
+			setDetectionState,
+			clearDetectionState,
+			loadSession,
+			saveSession,
+			clearSession,
 		],
 	);
 

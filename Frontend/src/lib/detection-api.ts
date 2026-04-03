@@ -3,7 +3,22 @@ import type {
 	DetectionResponse,
 	Incident,
 	VideoJobStatus,
+	SessionState,
 } from "@/lib/ppe-types";
+
+// Session State API functions
+export async function fetchSessionState(): Promise<SessionState> {
+	const response = await apiFetch<{ state: SessionState }>("/session");
+	return response.state;
+}
+
+export async function saveSessionState(state: SessionState): Promise<void> {
+	await apiPost("/session", state);
+}
+
+export async function clearSessionState(): Promise<void> {
+	await apiDelete("/session");
+}
 
 // Detection API functions
 export async function detectImage(file: File): Promise<DetectionResponse> {

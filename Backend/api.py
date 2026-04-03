@@ -39,6 +39,7 @@ VIDEOS_DIR = DATA_DIR / "videos"  # For uploaded videos
 TEMP_DIR = DATA_DIR / "temp"
 INCIDENTS_FILE = DATA_DIR / "incidents.json"
 METRICS_FILE = DATA_DIR / "metrics.json"
+SESSION_STATE_FILE = DATA_DIR / "session_state.json"
 
 # Create all data directories on startup
 DATA_DIR.mkdir(exist_ok=True)
@@ -268,6 +269,56 @@ def save_incidents():
         print(f"Failed to save incidents: {e}")
 
 
+def get_default_session_state():
+    """Get default session state."""
+    return {
+        "config": {
+            "confidence_threshold": 0.4,
+            "nms_iou_threshold": 0.45,
+            "is_dark_mode": True,
+        },
+        "video_progress": {
+            "processing": False,
+            "progress": 0,
+            "frames_processed": 0,
+            "total_frames": 0,
+            "alerts_found": 0,
+            "video_filename": None,
+            "job_id": None,
+        },
+        "detection_page": {
+            "media_type": "none",
+            "detections": [],
+            "image_filename": None,
+            "video_filename": None,
+            "is_image_processing": False,
+        },
+        "last_updated": datetime.now().isoformat(),
+    }
+
+
+def load_session_state():
+    """Load session state from JSON file."""
+    if SESSION_STATE_FILE.exists():
+        try:
+            with open(SESSION_STATE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load session state: {e}")
+            return get_default_session_state()
+    return get_default_session_state()
+
+
+def save_session_state(state: dict):
+    """Save session state to JSON file."""
+    try:
+        state["last_updated"] = datetime.now().isoformat()
+        with open(SESSION_STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        print(f"Failed to save session state: {e}")
+
+
 # Serve videos statically from data/videos/
 app.mount(
     "/api/videos",
@@ -375,6 +426,39 @@ async def reload_model(weights_file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
+
+
+@app.get("/api/session", dependencies=[Depends(verify_api_key)])
+async def get_session_state():
+    """Get the full session state from disk."""
+    state = load_session_state()
+    return {"state": state}
+
+
+@app.post("/api/session", dependencies=[Depends(verify_api_key)])
+async def update_session_state(request: Request):
+    """Update the full session state on disk."""
+    try:
+        body = await request.json()
+        save_session_state(body)
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to save session state: {str(e)}"
+        )
+
+
+@app.delete("/api/session", dependencies=[Depends(verify_api_key)])
+async def clear_session_state():
+    """Clear the session state (reset to defaults)."""
+    try:
+        if SESSION_STATE_FILE.exists():
+            SESSION_STATE_FILE.unlink()
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to clear session state: {str(e)}"
+        )
 
 
 def update_temporal_buffers(detected_violations: set):
