@@ -1,0 +1,9 @@
+black
+black[jupyter]
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+ultralytics>=8.2.0
+opencv-python>=4.9.0
+numpy>=1.26.0
