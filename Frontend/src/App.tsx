@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { PPEProvider, usePPE } from "@/contexts/PPEContext";
 import { AppLayout } from "@/components/AppLayout";
 import Dashboard from "@/pages/Dashboard";
-import DetectionPage from "@/pages/DetectionPage";
+import DetectionPage from "@/pages/detection/DetectionPage";
 import IncidentLogs from "@/pages/IncidentLogs";
 import NotFound from "@/pages/NotFound";
 

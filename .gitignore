@@ -43,6 +43,7 @@ data/
 # Local tooling workspace and caches
 .agent-local/
 .cache/
+.pytest_cache/
 
 # Model weights (large files — track with Git LFS or exclude)
 *.onnx

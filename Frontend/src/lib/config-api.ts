@@ -1,7 +1,6 @@
-import { apiFetch, apiPost, ApiError } from "@/lib/api";
+import { apiFetch, apiPost } from "@/lib/api";
 import type { AppConfig } from "@/lib/ppe-types";
 
-// Config API functions
 export async function fetchConfig(): Promise<AppConfig> {
 	return apiFetch<AppConfig>("/config");
 }
@@ -13,15 +12,12 @@ export async function updateThresholds(
 	await apiPost(`/config/thresholds?conf=${confidence}&iou=${iou}`, undefined);
 }
 
-// Model API functions
 export async function reloadModel(file: File): Promise<{
-	success: boolean;
+	status: string;
+	model_loaded: boolean;
 	model_name: string;
-	message?: string;
 }> {
 	const formData = new FormData();
 	formData.append("weights_file", file);
 	return apiPost("/model/reload", formData);
 }
-
-export { ApiError };

@@ -2,7 +2,6 @@
 export { API_BASE, ApiError, apiFetch, apiPost, apiDelete } from "./api";
 export {
 	detectImage,
-	detectVideo,
 	startVideoProcessing,
 	getVideoJobStatus,
 	fetchIncidents,
@@ -15,7 +14,8 @@ export {
 	fetchSessionState,
 	saveSessionState,
 	clearSessionState,
-} from "./detection-api";
+} from "./session-api";
+export { waitForVideoJob } from "./video-job";
 export {
 	formatClassName,
 	getPPEClass,
@@ -27,8 +27,6 @@ export {
 	type AppConfig,
 	type DetectionResponse,
 	type VideoProgressState,
-	type SavedDetectionState,
-	type SavedVideoState,
 	type VideoJobStatus,
 	type SessionState,
 } from "./ppe-types";

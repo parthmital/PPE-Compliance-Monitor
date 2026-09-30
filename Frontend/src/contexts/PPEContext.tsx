@@ -18,10 +18,9 @@ import {
 	clearIncidents,
 	detectImage,
 	startVideoProcessing,
-	getVideoJobStatus,
 	fetchSessionState,
 	saveSessionState,
-	clearSessionState,
+	waitForVideoJob,
 } from "@/lib";
 import type {
 	AppConfig,
@@ -29,70 +28,53 @@ import type {
 	Incident,
 	DetectionResponse,
 	VideoProgressState,
-	VideoJobStatus,
-	SessionState,
 	Detection,
 } from "@/lib";
+import {
+	detectionFromSession,
+	initialDetectionState,
+	initialVideoState,
+	toSessionState,
+	videoFromSession,
+	type DetectionState,
+	type MediaKind,
+	type VideoState,
+} from "./session-state";
 
-// STORAGE: All state is instantly persisted to the backend data folder via API
-// Every state change is immediately saved - no periodic/batch saving
+// UI state is saved to the backend data folder whenever it changes.
 
 export type ConnectionState = "connecting" | "online" | "offline";
 
+const REFRESH_INTERVAL_MS = 2000;
+
 interface PPEContextValue {
-	// State
 	connection: ConnectionState;
 	config: AppConfig;
 	metrics: SessionMetrics;
 	incidents: Incident[];
 	imageDimensions: { width: number; height: number } | null;
 	isDarkMode: boolean;
-	sessionStart: Date;
-	isLoading: boolean;
 
-	// Video Processing State (persisted)
 	videoProcessing: boolean;
 	videoProgress: number;
 	videoFramesProcessed: number;
 	videoTotalFrames: number;
 	videoAlertsFound: number;
 
-	// Detection Page State (persisted)
-	detectionMediaType: "image" | "video" | "none";
+	detectionMediaType: MediaKind;
 	detectionDetections: Detection[];
 	detectionImageFileName: string | null;
-	detectionVideoFileName: string | null;
 	detectionIsImageProcessing: boolean;
 
-	// Actions
 	setConfig: (partial: Partial<AppConfig>) => Promise<void>;
 	uploadModel: (file: File) => Promise<boolean>;
 	uploadImage: (file: File) => Promise<DetectionResponse | null>;
-	uploadVideo: (
-		file: File,
-	) => Promise<{ frames_processed: number; alerts_count: number } | null>;
-	refreshData: () => Promise<void>;
+	uploadVideo: (file: File) => Promise<void>;
 	clearAllIncidents: () => Promise<void>;
 	toggleDarkMode: () => void;
 	setVideoProcessing: (processing: boolean) => void;
-	setVideoProgress: (progress: VideoProgressState) => void;
-
-	// Detection page actions
-	setDetectionState: (
-		state: Partial<{
-			mediaType: "image" | "video" | "none";
-			detections: Detection[];
-			imageFileName: string | null;
-			videoFileName: string | null;
-			isImageProcessing: boolean;
-		}>,
-	) => void;
+	setDetectionState: (state: Partial<DetectionState>) => void;
 	clearDetectionState: () => void;
-
-	// Session state persistence
-	loadSession: () => Promise<void>;
-	saveSession: () => Promise<void>;
-	clearSession: () => Promise<void>;
 }
 
 const defaultConfig: AppConfig = {
@@ -100,6 +82,7 @@ const defaultConfig: AppConfig = {
 	nms_iou_threshold: 0.45,
 	model_loaded: false,
 	model_name: "best.pt",
+	temporal_window: 5,
 };
 
 const defaultMetrics: SessionMetrics = {
@@ -113,162 +96,84 @@ const defaultMetrics: SessionMetrics = {
 	persons_detected: 0,
 };
 
-const defaultSessionState: SessionState = {
-	config: {
-		confidence_threshold: 0.4,
-		nms_iou_threshold: 0.45,
-		is_dark_mode: true,
-	},
-	video_progress: {
-		processing: false,
-		progress: 0,
-		frames_processed: 0,
-		total_frames: 0,
-		alerts_found: 0,
-		video_filename: null,
-		job_id: null,
-	},
-	detection_page: {
-		media_type: "none",
-		detections: [],
-		image_filename: null,
-		video_filename: null,
-		is_image_processing: false,
-	},
-};
+function errorMessage(error: unknown, fallback: string): string {
+	return error instanceof Error ? error.message : fallback;
+}
 
 const PPEContext = createContext<PPEContextValue | null>(null);
 
 export function PPEProvider({ children }: { children: React.ReactNode }) {
-	// State - all persisted instantly to backend data folder via useEffect
 	const [connection, setConnection] = useState<ConnectionState>("connecting");
 	const [config, setConfigState] = useState<AppConfig>(defaultConfig);
-	const [metrics, setMetricsState] = useState<SessionMetrics>(defaultMetrics);
+	const [metrics, setMetrics] = useState<SessionMetrics>(defaultMetrics);
 	const [incidents, setIncidents] = useState<Incident[]>([]);
 	const [imageDimensions, setImageDimensions] = useState<{
 		width: number;
 		height: number;
 	} | null>(null);
 	const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
-	const [isLoading, setIsLoading] = useState(false);
-	const [sessionStart] = useState(() => new Date());
-
-	// Video Processing State - using useState with backend persistence
-	const [videoProgressState, setVideoProgressState] = useState<{
-		processing: boolean;
-		progress: number;
-		framesProcessed: number;
-		totalFrames: number;
-		alertsFound: number;
-		jobId: string | null;
-		videoFileName: string | null;
-		videoFileType: string | null;
-	}>({
-		processing: false,
-		progress: 0,
-		framesProcessed: 0,
-		totalFrames: 0,
-		alertsFound: 0,
-		jobId: null,
-		videoFileName: null,
-		videoFileType: null,
-	});
-
-	// Detection Page State - using useState with backend persistence
-	const [detectionMediaType, setDetectionMediaType] = useState<
-		"image" | "video" | "none"
-	>("none");
-	const [detectionDetections, setDetectionDetections] = useState<Detection[]>(
-		[],
+	const [video, setVideo] = useState<VideoState>(initialVideoState);
+	const [detection, setDetection] = useState<DetectionState>(
+		initialDetectionState,
 	);
-	const [detectionImageFileName, setDetectionImageFileName] = useState<
-		string | null
-	>(null);
-	const [detectionVideoFileName, setDetectionVideoFileName] = useState<
-		string | null
-	>(null);
-	const [detectionIsImageProcessing, setDetectionIsImageProcessing] =
-		useState(false);
+	// Saving waits until the saved session has been loaded, so defaults
+	// never overwrite it.
+	const hydrated = useRef(false);
 
-	// Video job polling refs
-	const jobPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-	const currentJobIdRef = useRef<string | null>(null);
-
-	// Apply dark mode
 	useEffect(() => {
 		document.documentElement.classList.toggle("dark", isDarkMode);
 	}, [isDarkMode]);
 
-	// Fetch all data from backend
 	const refreshData = useCallback(async () => {
-		try {
-			const [configData, metricsData, incidentsData] = await Promise.all([
-				fetchConfig().catch(() => null),
-				fetchMetrics().catch(() => null),
-				fetchIncidents().catch(() => null),
-			]);
-
-			setConnection(configData ? "online" : "offline");
-			if (configData) setConfigState(configData);
-			if (metricsData) setMetricsState(metricsData);
-			if (incidentsData) setIncidents(incidentsData);
-		} catch (error) {
-			console.error("Failed to refresh data:", error);
-		}
+		const [configData, metricsData, incidentsData] = await Promise.all([
+			fetchConfig().catch(() => null),
+			fetchMetrics().catch(() => null),
+			fetchIncidents().catch(() => null),
+		]);
+		setConnection(configData ? "online" : "offline");
+		if (configData) setConfigState(configData);
+		if (metricsData) setMetrics(metricsData);
+		if (incidentsData) setIncidents(incidentsData);
 	}, []);
 
-	// Update config with backend sync
 	const setConfig = useCallback(
 		async (partial: Partial<AppConfig>) => {
 			setConfigState((prev) => ({ ...prev, ...partial }));
-
-			// Sync thresholds with backend
 			if (
-				partial.confidence_threshold !== undefined ||
-				partial.nms_iou_threshold !== undefined
-			) {
-				const currentConf =
-					partial.confidence_threshold ?? config.confidence_threshold;
-				const currentIou =
-					partial.nms_iou_threshold ?? config.nms_iou_threshold;
-				try {
-					await updateThresholds(currentConf, currentIou);
-				} catch (error) {
-					toast.error("Failed to update thresholds");
-				}
+				partial.confidence_threshold === undefined &&
+				partial.nms_iou_threshold === undefined
+			)
+				return;
+			try {
+				await updateThresholds(
+					partial.confidence_threshold ?? config.confidence_threshold,
+					partial.nms_iou_threshold ?? config.nms_iou_threshold,
+				);
+			} catch {
+				toast.error("Failed to update thresholds");
 			}
 		},
 		[config.confidence_threshold, config.nms_iou_threshold],
 	);
 
-	// Upload model weights
 	const uploadModel = useCallback(async (file: File): Promise<boolean> => {
-		setIsLoading(true);
 		try {
 			const result = await reloadModel(file);
-			if (result.success) {
-				setConfigState((prev) => ({
-					...prev,
-					model_loaded: true,
-					model_name: result.model_name,
-				}));
-				toast.success(`Model loaded: ${result.model_name}`);
-				return true;
-			}
+			setConfigState((prev) => ({
+				...prev,
+				model_loaded: result.model_loaded,
+				model_name: result.model_name,
+			}));
+			toast.success(`Model loaded: ${result.model_name}`);
+			return true;
 		} catch (error) {
-			const message =
-				error instanceof Error ? error.message : "Failed to upload model";
-			toast.error(message);
-		} finally {
-			setIsLoading(false);
+			toast.error(errorMessage(error, "Failed to upload model"));
+			return false;
 		}
-		return false;
 	}, []);
 
-	// Upload image for detection
 	const uploadImage = useCallback(
 		async (file: File): Promise<DetectionResponse | null> => {
-			setIsLoading(true);
 			try {
 				const result = await detectImage(file);
 				setImageDimensions({
@@ -278,30 +183,64 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 				await refreshData();
 				return result;
 			} catch (error) {
-				const message =
-					error instanceof Error ? error.message : "Failed to process image";
-				toast.error(message);
+				toast.error(errorMessage(error, "Failed to process image"));
 				return null;
-			} finally {
-				setIsLoading(false);
 			}
 		},
 		[refreshData],
 	);
 
-	// Clear all incidents
+	const applyVideoProgress = useCallback((progress: VideoProgressState) => {
+		setVideo((prev) => ({ ...prev, ...progress }));
+	}, []);
+
+	// Follows a running job to completion, then refreshes dashboard data.
+	const followVideoJob = useCallback(
+		async (jobId: string) => {
+			try {
+				await waitForVideoJob(jobId, applyVideoProgress);
+				toast.success("Video processing complete");
+			} catch (error) {
+				toast.error(errorMessage(error, "Video processing failed"));
+			} finally {
+				setVideo((prev) => ({ ...prev, processing: false }));
+				await refreshData();
+			}
+		},
+		[applyVideoProgress, refreshData],
+	);
+
+	const uploadVideo = useCallback(
+		async (file: File) => {
+			setVideo({ ...initialVideoState, processing: true, progress: 5 });
+			try {
+				const job = await startVideoProcessing(file);
+				setVideo((prev) => ({
+					...prev,
+					jobId: job.job_id,
+					videoFileName: file.name,
+					totalFrames: job.estimated_frames,
+				}));
+				await followVideoJob(job.job_id);
+			} catch (error) {
+				toast.error(errorMessage(error, "Failed to process video"));
+				setVideo((prev) => ({ ...prev, processing: false }));
+			}
+		},
+		[followVideoJob],
+	);
+
 	const clearAllIncidents = useCallback(async () => {
 		try {
 			await clearIncidents();
 			setIncidents([]);
-			await refreshData(); // Refresh metrics after clearing
+			await refreshData();
 			toast.success("All incidents cleared");
-		} catch (error) {
+		} catch {
 			toast.error("Failed to clear incidents");
 		}
 	}, [refreshData]);
 
-	// Toggle dark mode
 	const toggleDarkMode = useCallback(() => {
 		// Cross-fade the whole page instead of snapping every colour at once.
 		const apply = () =>
@@ -318,332 +257,70 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 		else document.startViewTransition(apply);
 	}, []);
 
-	// Session persistence functions
 	const loadSession = useCallback(async () => {
 		try {
-			const sessionState = await fetchSessionState();
-			if (sessionState.config) {
+			const session = await fetchSessionState();
+			if (session.config) {
 				setConfigState((prev) => ({
 					...prev,
-					confidence_threshold: sessionState.config.confidence_threshold,
-					nms_iou_threshold: sessionState.config.nms_iou_threshold,
+					confidence_threshold: session.config.confidence_threshold,
+					nms_iou_threshold: session.config.nms_iou_threshold,
 				}));
-				setIsDarkMode(sessionState.config.is_dark_mode);
+				setIsDarkMode(session.config.is_dark_mode);
 			}
-			if (sessionState.video_progress) {
-				const jobId = sessionState.video_progress.job_id;
-				let isProcessing = sessionState.video_progress.processing;
-				let progress = sessionState.video_progress.progress;
-				let framesProcessed = sessionState.video_progress.frames_processed;
-				let totalFrames = sessionState.video_progress.total_frames;
-				let alertsFound = sessionState.video_progress.alerts_found;
-
-				// If session says processing, verify job status with backend
-				if (isProcessing && jobId) {
-					try {
-						const jobStatus = await getVideoJobStatus(jobId);
-						if (jobStatus.status === "completed") {
-							isProcessing = false;
-							progress = 100;
-							framesProcessed = jobStatus.frames_processed;
-							alertsFound = jobStatus.alerts_found;
-						} else if (jobStatus.status === "failed") {
-							isProcessing = false;
-							progress = 0;
-						} else if (
-							jobStatus.status === "processing" ||
-							jobStatus.status === "pending"
-						) {
-							// Job is actually still running, use latest data
-							progress = jobStatus.progress_percent;
-							framesProcessed = jobStatus.frames_processed;
-							totalFrames = jobStatus.total_frames;
-							alertsFound = jobStatus.alerts_found;
-						}
-					} catch {
-						// If job status check fails, assume job is done to avoid stuck state
-						isProcessing = false;
-					}
-				}
-
-				setVideoProgressState({
-					processing: isProcessing,
-					progress,
-					framesProcessed,
-					totalFrames,
-					alertsFound,
-					jobId,
-					videoFileName: sessionState.video_progress.video_filename,
-					videoFileType: null,
-				});
-			}
-			if (sessionState.detection_page) {
-				setDetectionMediaType(sessionState.detection_page.media_type);
-				setDetectionDetections(sessionState.detection_page.detections);
-				setDetectionImageFileName(sessionState.detection_page.image_filename);
-				setDetectionVideoFileName(sessionState.detection_page.video_filename);
-				setDetectionIsImageProcessing(
-					sessionState.detection_page.is_image_processing,
-				);
+			if (session.detection_page)
+				setDetection(detectionFromSession(session.detection_page));
+			if (session.video_progress) {
+				const saved = videoFromSession(session.video_progress);
+				setVideo(saved);
+				// Resume tracking a job that was running before the reload.
+				if (saved.processing && saved.jobId) followVideoJob(saved.jobId);
 			}
 		} catch (error) {
 			console.error("Failed to load session:", error);
+		} finally {
+			hydrated.current = true;
 		}
-	}, []);
+	}, [followVideoJob]);
 
-	const saveSession = useCallback(async () => {
-		try {
-			const sessionState: SessionState = {
-				config: {
-					confidence_threshold: config.confidence_threshold,
-					nms_iou_threshold: config.nms_iou_threshold,
-					is_dark_mode: isDarkMode,
-				},
-				video_progress: {
-					processing: videoProgressState.processing,
-					progress: videoProgressState.progress,
-					frames_processed: videoProgressState.framesProcessed,
-					total_frames: videoProgressState.totalFrames,
-					alerts_found: videoProgressState.alertsFound,
-					video_filename: videoProgressState.videoFileName,
-					job_id: videoProgressState.jobId,
-				},
-				detection_page: {
-					media_type: detectionMediaType,
-					detections: detectionDetections,
-					image_filename: detectionImageFileName,
-					video_filename: detectionVideoFileName,
-					is_image_processing: detectionIsImageProcessing,
-				},
-			};
-			await saveSessionState(sessionState);
-		} catch (error) {
-			console.error("Failed to save session:", error);
-		}
-	}, [
-		config,
-		isDarkMode,
-		videoProgressState,
-		detectionMediaType,
-		detectionDetections,
-		detectionImageFileName,
-		detectionVideoFileName,
-		detectionIsImageProcessing,
-	]);
-
-	const clearSession = useCallback(async () => {
-		try {
-			await clearSessionState();
-			setConfigState(defaultConfig);
-			setIsDarkMode(true);
-			setVideoProgressState({
-				processing: false,
-				progress: 0,
-				framesProcessed: 0,
-				totalFrames: 0,
-				alertsFound: 0,
-				jobId: null,
-				videoFileName: null,
-				videoFileType: null,
-			});
-			setDetectionMediaType("none");
-			setDetectionDetections([]);
-			setDetectionImageFileName(null);
-			setDetectionVideoFileName(null);
-			setDetectionIsImageProcessing(false);
-		} catch (error) {
-			console.error("Failed to clear session:", error);
-		}
-	}, []);
-
-	// Initial data load
 	useEffect(() => {
 		refreshData();
-		// Load session state from backend on mount
 		loadSession();
-		const interval = setInterval(refreshData, 2000);
+		const interval = setInterval(refreshData, REFRESH_INTERVAL_MS);
 		return () => clearInterval(interval);
 	}, [refreshData, loadSession]);
 
-	// Instant save session state whenever relevant state changes
 	useEffect(() => {
-		saveSession();
+		if (!hydrated.current) return;
+		saveSessionState(
+			toSessionState({
+				confidence: config.confidence_threshold,
+				iou: config.nms_iou_threshold,
+				isDarkMode,
+				video,
+				detection,
+			}),
+		).catch((error) => console.error("Failed to save session:", error));
 	}, [
 		config.confidence_threshold,
 		config.nms_iou_threshold,
 		isDarkMode,
-		videoProgressState.processing,
-		videoProgressState.progress,
-		videoProgressState.framesProcessed,
-		videoProgressState.totalFrames,
-		videoProgressState.alertsFound,
-		videoProgressState.jobId,
-		videoProgressState.videoFileName,
-		detectionMediaType,
-		detectionDetections,
-		detectionImageFileName,
-		detectionVideoFileName,
-		detectionIsImageProcessing,
-		saveSession,
+		video,
+		detection,
 	]);
 
-	// Video processing state setters
-	const setVideoProcessingState = useCallback(
-		(processing: boolean) => {
-			setVideoProgressState((prev) => ({ ...prev, processing }));
-		},
-		[setVideoProgressState],
-	);
-
-	const setVideoProgress = useCallback(
-		(progress: VideoProgressState) => {
-			setVideoProgressState((prev) => ({
-				...prev,
-				processing: progress.processing,
-				progress: progress.progress,
-				framesProcessed: progress.framesProcessed,
-				totalFrames: progress.totalFrames,
-				alertsFound: progress.alertsFound,
-			}));
-		},
-		[setVideoProgressState],
-	);
-
-	// Detection state management functions
-	const setDetectionState = useCallback(
-		(
-			state: Partial<{
-				mediaType: "image" | "video" | "none";
-				detections: Detection[];
-				imageFileName: string | null;
-				videoFileName: string | null;
-				isImageProcessing: boolean;
-			}>,
-		) => {
-			if (state.mediaType !== undefined) setDetectionMediaType(state.mediaType);
-			if (state.detections !== undefined)
-				setDetectionDetections(state.detections);
-			if (state.imageFileName !== undefined)
-				setDetectionImageFileName(state.imageFileName);
-			if (state.videoFileName !== undefined)
-				setDetectionVideoFileName(state.videoFileName);
-			if (state.isImageProcessing !== undefined)
-				setDetectionIsImageProcessing(state.isImageProcessing);
-		},
-		[],
-	);
-
-	const clearDetectionState = useCallback(() => {
-		setDetectionMediaType("none");
-		setDetectionDetections([]);
-		setDetectionImageFileName(null);
-		setDetectionVideoFileName(null);
-		setDetectionIsImageProcessing(false);
+	const setVideoProcessing = useCallback((processing: boolean) => {
+		setVideo((prev) => ({ ...prev, processing }));
 	}, []);
 
-	// Upload video for detection (async with polling) - defined after setters
-	const uploadVideo = useCallback(
-		async (
-			file: File,
-			onProgress?: (state: VideoProgressState) => void,
-		): Promise<{ frames_processed: number; alerts_count: number } | null> => {
-			setIsLoading(true);
-			setVideoProcessingState(true);
+	const setDetectionState = useCallback((state: Partial<DetectionState>) => {
+		setDetection((prev) => ({ ...prev, ...state }));
+	}, []);
 
-			try {
-				// Start video processing job
-				const startResult = await startVideoProcessing(file);
-				const jobId = startResult.job_id;
-				currentJobIdRef.current = jobId;
+	const clearDetectionState = useCallback(() => {
+		setDetection(initialDetectionState);
+	}, []);
 
-				// Set initial progress
-				const initialState: VideoProgressState = {
-					processing: true,
-					progress: 5,
-					framesProcessed: 0,
-					totalFrames: startResult.estimated_frames,
-					alertsFound: 0,
-				};
-				setVideoProgress(initialState);
-				onProgress?.(initialState);
-
-				// Poll for job status
-				return new Promise((resolve, reject) => {
-					const pollInterval = setInterval(async () => {
-						try {
-							const jobStatus = await getVideoJobStatus(jobId);
-
-							// Update progress
-							const progressState: VideoProgressState = {
-								processing:
-									jobStatus.status === "processing" ||
-									jobStatus.status === "pending",
-								progress: jobStatus.progress_percent,
-								framesProcessed: jobStatus.frames_processed,
-								totalFrames: jobStatus.total_frames,
-								alertsFound: jobStatus.alerts_found,
-							};
-							setVideoProgress(progressState);
-							onProgress?.(progressState);
-
-							// Check if job is complete
-							if (jobStatus.status === "completed") {
-								clearInterval(pollInterval);
-								jobPollIntervalRef.current = null;
-								currentJobIdRef.current = null;
-								setVideoProcessingState(false);
-								await refreshData();
-								toast.success("Video processing complete");
-								resolve({
-									frames_processed: jobStatus.frames_processed,
-									alerts_count: jobStatus.alerts_found,
-								});
-							} else if (jobStatus.status === "failed") {
-								clearInterval(pollInterval);
-								jobPollIntervalRef.current = null;
-								currentJobIdRef.current = null;
-								setVideoProcessingState(false);
-								reject(
-									new Error(
-										jobStatus.error_message || "Video processing failed",
-									),
-								);
-							}
-						} catch (error) {
-							// Continue polling on error, but log it
-							console.error("Error polling job status:", error);
-						}
-					}, 2000); // Poll every 2 seconds
-
-					jobPollIntervalRef.current = pollInterval;
-
-					// Timeout after 30 minutes
-					setTimeout(
-						() => {
-							if (jobPollIntervalRef.current) {
-								clearInterval(jobPollIntervalRef.current);
-								jobPollIntervalRef.current = null;
-								setVideoProcessingState(false);
-								reject(new Error("Video processing timed out"));
-							}
-						},
-						30 * 60 * 1000,
-					);
-				});
-			} catch (error) {
-				const message =
-					error instanceof Error ? error.message : "Failed to process video";
-				toast.error(message);
-				setVideoProcessingState(false);
-				return null;
-			} finally {
-				setIsLoading(false);
-			}
-		},
-		[refreshData, setVideoProcessingState, setVideoProgress],
-	);
-
-	// Memoize context value
 	const value = useMemo<PPEContextValue>(
 		() => ({
 			connection,
@@ -652,32 +329,24 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			incidents,
 			imageDimensions,
 			isDarkMode,
-			sessionStart,
-			isLoading,
-			videoProcessing: videoProgressState.processing,
-			videoProgress: videoProgressState.progress,
-			videoFramesProcessed: videoProgressState.framesProcessed,
-			videoTotalFrames: videoProgressState.totalFrames,
-			videoAlertsFound: videoProgressState.alertsFound,
-			detectionMediaType,
-			detectionDetections,
-			detectionImageFileName,
-			detectionVideoFileName,
-			detectionIsImageProcessing,
+			videoProcessing: video.processing,
+			videoProgress: video.progress,
+			videoFramesProcessed: video.framesProcessed,
+			videoTotalFrames: video.totalFrames,
+			videoAlertsFound: video.alertsFound,
+			detectionMediaType: detection.mediaType,
+			detectionDetections: detection.detections,
+			detectionImageFileName: detection.imageFileName,
+			detectionIsImageProcessing: detection.isImageProcessing,
 			setConfig,
 			uploadModel,
 			uploadImage,
 			uploadVideo,
-			refreshData,
 			clearAllIncidents,
 			toggleDarkMode,
-			setVideoProcessing: setVideoProcessingState,
-			setVideoProgress,
+			setVideoProcessing,
 			setDetectionState,
 			clearDetectionState,
-			loadSession,
-			saveSession,
-			clearSession,
 		}),
 		[
 			connection,
@@ -686,28 +355,17 @@ export function PPEProvider({ children }: { children: React.ReactNode }) {
 			incidents,
 			imageDimensions,
 			isDarkMode,
-			sessionStart,
-			isLoading,
-			videoProgressState,
-			detectionMediaType,
-			detectionDetections,
-			detectionImageFileName,
-			detectionVideoFileName,
-			detectionIsImageProcessing,
+			video,
+			detection,
 			setConfig,
 			uploadModel,
 			uploadImage,
 			uploadVideo,
-			refreshData,
 			clearAllIncidents,
 			toggleDarkMode,
-			setVideoProcessingState,
-			setVideoProgress,
+			setVideoProcessing,
 			setDetectionState,
 			clearDetectionState,
-			loadSession,
-			saveSession,
-			clearSession,
 		],
 	);
 

@@ -1,0 +1,25 @@
+[importlinter]
+root_package = ppe_api
+include_external_packages = True
+
+[importlinter:contract:layers]
+name = Routes -> container -> services -> detection -> storage/config
+type = layers
+layers =
+    ppe_api.main
+    ppe_api.routes
+    ppe_api.security
+    ppe_api.container
+    ppe_api.services
+    ppe_api.detection
+    ppe_api.json_file | ppe_api.config
+
+[importlinter:contract:detection-pure]
+name = Detection knows nothing about FastAPI or persistence
+type = forbidden
+source_modules =
+    ppe_api.detection
+forbidden_modules =
+    fastapi
+    ppe_api.json_file
+    ppe_api.services

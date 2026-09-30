@@ -26,4 +26,60 @@ export default tseslint.config(
 			"@typescript-eslint/no-unused-vars": "off",
 		},
 	},
+	// Module boundaries: lib <- contexts <- components <- pages. See ARCHITECTURE.md.
+	{
+		files: ["src/lib/**"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: [
+								"@/contexts/*",
+								"@/components/*",
+								"@/components",
+								"@/pages/*",
+							],
+							message:
+								"lib is the lowest layer and must stay free of React state and UI.",
+						},
+					],
+				},
+			],
+		},
+	},
+	{
+		files: ["src/contexts/**"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: ["@/components/*", "@/components", "@/pages/*"],
+							message: "Contexts hold state only; they must not import UI.",
+						},
+					],
+				},
+			],
+		},
+	},
+	{
+		files: ["src/components/**"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: ["@/pages/*"],
+							message:
+								"Components are shared; pages compose them, not the reverse.",
+						},
+					],
+				},
+			],
+		},
+	},
 );

@@ -10,11 +10,11 @@ import {
 	EmptyState,
 	IncidentThumb,
 	IncidentViewer,
-	MissingPPE,
+	IncidentSummary,
 	PageHeader,
 	Stat,
 } from "@/components";
-import { formatCount, formatTimestamp } from "@/lib";
+import { formatCount } from "@/lib";
 import { incidentSource } from "@/lib/incidents";
 
 const RECENT_LIMIT = 5;
@@ -52,7 +52,6 @@ function RecentIncidents() {
 		<>
 			<ul className="divide-y">
 				{recent.map((incident, index) => {
-					const { date, time } = formatTimestamp(incident.timestamp);
 					return (
 						<li key={incident.id}>
 							<button
@@ -64,13 +63,10 @@ function RecentIncidents() {
 									incident={incident}
 									className="h-12 w-20 shrink-0 rounded-md"
 								/>
-								<div className="min-w-0 flex-1 space-y-1.5">
-									<p className="text-[13px]">
-										<span className="font-mono font-medium">{time}</span>
-										<span className="text-muted-foreground"> · {date}</span>
-									</p>
-									<MissingPPE items={incident.missing_ppe} />
-								</div>
+								<IncidentSummary
+									incident={incident}
+									className="flex-1 space-y-1.5"
+								/>
 								<span className="hidden shrink-0 text-[13px] text-muted-foreground sm:block">
 									{incidentSource(incident).kind}
 								</span>

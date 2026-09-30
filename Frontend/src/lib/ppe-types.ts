@@ -67,6 +67,8 @@ export interface AppConfig {
 	nms_iou_threshold: number;
 	model_loaded: boolean;
 	model_name: string;
+	// Consecutive frames a video violation must persist to raise an alert.
+	temporal_window: number;
 }
 
 export interface DetectionResponse {
@@ -81,22 +83,6 @@ export interface VideoProgressState {
 	framesProcessed: number;
 	totalFrames: number;
 	alertsFound: number;
-}
-
-// Saved state interfaces for localStorage persistence
-export interface SavedDetectionState {
-	mediaType: "image" | "video" | "none";
-	detections: Detection[];
-	imageUrl: string | null;
-	timestamp: number;
-}
-
-export interface SavedVideoState {
-	fileName: string;
-	fileSize: number;
-	fileType: string;
-	timestamp: number;
-	jobId?: string; // Optional job ID for async processing
 }
 
 // Video job status for async processing

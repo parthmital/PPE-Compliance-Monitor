@@ -7,6 +7,7 @@ export { DropZone, type MediaType } from "./DropZone";
 export { EmptyState } from "./EmptyState";
 export { FileUploadButton } from "./FileUploadButton";
 export { ImagePreview } from "./ImagePreview";
+export { IncidentSummary } from "./IncidentSummary";
 export { IncidentThumb } from "./IncidentThumb";
 export { IncidentViewer } from "./IncidentViewer";
 export { MissingPPE } from "./MissingPPE";

@@ -147,30 +147,34 @@ npm run dev
 
 ## Model Classes
 
-| Class          | Type       | Description                |
-| -------------- | ---------- | -------------------------- |
-| Hardhat        | Compliance | Worker wearing hard hat    |
-| Mask           | Compliance | Worker wearing face mask   |
-| NO-Hardhat     | Violation  | Worker missing hard hat    |
-| NO-Mask        | Violation  | Worker missing mask        |
-| NO-Safety Vest | Violation  | Worker missing safety vest |
-| Person         | Neutral    | Detected person            |
-| Safety Cone    | Neutral    | Safety cone object         |
-| Safety Vest    | Compliance | Worker wearing safety vest |
-| machinery      | Neutral    | Heavy machinery            |
-| vehicle        | Neutral    | Vehicle in scene           |
+| Class          | Type       | Description                                        |
+| -------------- | ---------- | -------------------------------------------------- |
+| Hardhat        | Compliance | Worker wearing hard hat                            |
+| Mask           | Compliance | Worker wearing face mask                           |
+| NO-Hardhat     | Violation  | Worker missing hard hat                            |
+| NO-Mask        | Advisory   | Worker missing mask (reported, raises no incident) |
+| NO-Safety Vest | Violation  | Worker missing safety vest                         |
+| Person         | Neutral    | Detected person                                    |
+| Safety Cone    | Neutral    | Safety cone object                                 |
+| Safety Vest    | Compliance | Worker wearing safety vest                         |
+| machinery      | Neutral    | Heavy machinery                                    |
+| vehicle        | Neutral    | Vehicle in scene                                   |
 
 ## Configuration
 
 ### Backend Environment Variables (`Backend/.env`)
 
-| Variable          | Default                                                             | Description                         |
-| ----------------- | ------------------------------------------------------------------- | ----------------------------------- |
-| `API_KEY`         | -                                                                   | Optional API key for authentication |
-| `ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173,http://localhost:8080` | CORS origins                        |
-| `MODEL_PATH`      | `Trained Weights/best.pt`                                           | Path to YOLO weights                |
-| `MAX_UPLOAD_SIZE` | `52428800` (50MB)                                                   | Max upload file size                |
-| `TIMEOUT_SECONDS` | `120`                                                               | Request timeout                     |
+| Variable           | Default                                                             | Description                            |
+| ------------------ | ------------------------------------------------------------------- | -------------------------------------- |
+| `API_KEY`          | -                                                                   | Optional API key for authentication    |
+| `ALLOWED_ORIGINS`  | `http://localhost:3000,http://localhost:5173,http://localhost:8080` | CORS origins                           |
+| `MODEL_PATH`       | `Trained Weights/best.pt`                                           | Path to YOLO weights                   |
+| `CLASS_NAMES_FILE` | `Trained Weights/ppe_data.yaml`                                     | Dataset YAML the class names come from |
+| `DATA_DIR`         | `data`                                                              | Runtime data folder                    |
+| `MAX_UPLOAD_SIZE`  | `52428800` (50MB)                                                   | Max upload file size                   |
+| `HOST` / `PORT`    | `0.0.0.0` / `8000`                                                  | Address the API listens on             |
+
+Relative paths resolve against `Backend/`. Invalid values stop the backend at startup.
 
 ### Frontend Environment Variables (`Frontend/.env`)
 
@@ -205,8 +209,8 @@ Session state is automatically saved on every change and restored on application
 
 Videos are processed asynchronously:
 
-1. Upload triggers background job
-2. Job ID returned immediately
+1. Upload triggers a background job that runs in a worker thread, off the event loop
+2. Job ID returned immediately (jobs live in memory, so a backend restart forgets running jobs)
 3. Frontend polls `/api/detect/video/{job_id}` every 2 seconds
 4. Progress updates in real-time
 5. Completion triggers incident/metrics refresh
@@ -387,9 +391,13 @@ The included Jupyter notebook `Construction-Site-Safety.ipynb` contains the full
 
 ### Code Quality
 
-- **Backend**: Black formatter configured (`black`, `black[jupyter]`)
-- **Frontend**: ESLint + Prettier for TypeScript/React (`npm run lint` in `Frontend/`)
-- **Type Safety**: Full TypeScript coverage on frontend
+Run every check with one command from the repository root:
+
+```bash
+npm run check
+```
+
+It runs ESLint (including module boundary rules), the TypeScript check, Prettier, the jscpd duplicate-code check, the Vite build, Black, import-linter layer contracts, and the backend pytest suite. CI (`.github/workflows/ci.yml`) runs the same command. The module layout and dependency rules are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### Browser Support
 

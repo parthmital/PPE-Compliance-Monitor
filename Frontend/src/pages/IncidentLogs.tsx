@@ -35,6 +35,7 @@ import {
 	EmptyState,
 	IncidentThumb,
 	IncidentViewer,
+	IncidentSummary,
 	MissingPPE,
 	PageHeader,
 	SegmentedControl,
@@ -135,13 +136,7 @@ function IncidentGrid({
 								incident={incident}
 								className="aspect-video w-full"
 							/>
-							<div className="space-y-2 p-3">
-								<p className="text-[13px]">
-									<span className="font-mono font-medium">{time}</span>
-									<span className="text-muted-foreground"> · {date}</span>
-								</p>
-								<MissingPPE items={incident.missing_ppe} />
-							</div>
+							<IncidentSummary incident={incident} className="space-y-2 p-3" />
 						</button>
 					</li>
 				);
