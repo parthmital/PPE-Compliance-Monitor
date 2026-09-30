@@ -1,0 +1,11 @@
+{
+	"name": "ppe-compliance-monitor-workspace",
+	"private": true,
+	"description": "Runs the PPE Compliance Monitor backend and frontend together for development.",
+	"scripts": {
+		"dev": "node scripts/dev/main.mjs"
+	},
+	"engines": {
+		"node": ">=18"
+	}
+}
