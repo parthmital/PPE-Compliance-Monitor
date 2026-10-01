@@ -205,7 +205,7 @@ function checkModelWeights() {
 		: null;
 	const weights = path.resolve(
 		BACKEND_DIR,
-		configured || "Trained Weights/best.pt",
+		configured || "output/weights/best.pt",
 	);
 
 	if (existsSync(weights)) {

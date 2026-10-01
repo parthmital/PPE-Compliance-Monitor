@@ -1,0 +1,49 @@
+{
+	"model": "yolo11m",
+	"epochs_run": 75,
+	"best_epoch": 72,
+	"splits": {
+		"train": 2240,
+		"val": 280,
+		"test": 281
+	},
+	"metrics": {
+		"val": {
+			"mAP50": 0.8679,
+			"mAP50_95": 0.6368,
+			"precision": 0.9236,
+			"recall": 0.8084,
+			"F1": 0.8621,
+			"ms_per_img": 32.7886
+		},
+		"test": {
+			"mAP50": 0.8659,
+			"mAP50_95": 0.6158,
+			"precision": 0.9135,
+			"recall": 0.8053,
+			"F1": 0.856,
+			"ms_per_img": 31.3217
+		},
+		"test_tta": {
+			"mAP50": 0.8603,
+			"mAP50_95": 0.6206,
+			"precision": 0.9027,
+			"recall": 0.7853,
+			"F1": 0.8399,
+			"ms_per_img": 85.9799
+		}
+	},
+	"inference_img_per_s": 35.9,
+	"peak_gpu_mem_mb_training": {
+		"0": 8677,
+		"1": 8543
+	},
+	"stage_minutes": {
+		"data_loading_s": 0.04,
+		"training_s": 43.49,
+		"evaluation_s": 1.02,
+		"inference_s": 0.13,
+		"export_s": 0.11,
+		"total_s": 44.88
+	}
+}

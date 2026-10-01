@@ -1,1 +1,1 @@
-"""PPE Compliance Monitor backend: YOLOv8 detection served over FastAPI."""
+"""PPE Compliance Monitor backend: YOLO11 detection served over FastAPI."""

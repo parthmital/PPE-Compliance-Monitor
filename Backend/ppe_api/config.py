@@ -77,8 +77,8 @@ def load_settings() -> Settings:
     )
     return Settings(
         data_dir=_path_env("DATA_DIR", "data"),
-        model_path=_path_env("MODEL_PATH", "Trained Weights/best.pt"),
-        class_names_file=_path_env("CLASS_NAMES_FILE", "Trained Weights/ppe_data.yaml"),
+        model_path=_path_env("MODEL_PATH", "output/weights/best.pt"),
+        class_names_file=_path_env("CLASS_NAMES_FILE", "output/weights/ppe_data.yaml"),
         allowed_origins=[o.strip() for o in origins.split(",") if o.strip()],
         api_key=os.getenv("API_KEY") or None,
         max_upload_size=_int_env("MAX_UPLOAD_SIZE", 50 * 1024 * 1024),

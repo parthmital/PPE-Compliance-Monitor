@@ -48,6 +48,8 @@ data/
 # Model weights (large files — track with Git LFS or exclude)
 *.onnx
 *.pt
+# Except the trained model the backend serves (about 40 MB)
+!Backend/output/weights/best.pt
 
 # Large Media & Archives
 *.mp4

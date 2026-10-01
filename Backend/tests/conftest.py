@@ -13,7 +13,7 @@ from ppe_api.detection.detector import Detector
 from ppe_api.main import create_app
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-CLASS_NAMES = load_class_names(BACKEND_DIR / "Trained Weights" / "ppe_data.yaml")
+CLASS_NAMES = load_class_names(BACKEND_DIR / "output" / "weights" / "ppe_data.yaml")
 
 
 def box(name: str, bbox=(10, 10, 50, 50), conf=0.9):

@@ -1,0 +1,16 @@
+path: /kaggle/working/split_data
+train: train/images
+val: val/images
+test: test/images
+nc: 10
+names:
+  - Hardhat
+  - Mask
+  - NO-Hardhat
+  - NO-Mask
+  - NO-Safety Vest
+  - Person
+  - Safety Cone
+  - Safety Vest
+  - machinery
+  - vehicle

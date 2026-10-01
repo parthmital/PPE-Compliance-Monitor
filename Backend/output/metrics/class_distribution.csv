@@ -1,0 +1,11 @@
+,train,val,test,total
+Hardhat,2667,276,391,3334
+Mask,1346,168,186,1700
+NO-Hardhat,1943,225,259,2427
+NO-Mask,2634,282,334,3250
+NO-Safety Vest,3269,422,467,4158
+Person,7908,923,1041,9872
+Safety Cone,2782,337,383,3502
+Safety Vest,2556,266,313,3135
+machinery,4274,505,567,5346
+vehicle,1305,150,173,1628

@@ -1,6 +1,6 @@
 # Architecture
 
-A single-host app: a FastAPI backend running YOLOv8 inference, and a React (Vite) dashboard that talks to it over `/api`. One deployable per side; no services split, because nothing needs independent scaling yet.
+A single-host app: a FastAPI backend running YOLO11 inference, and a React (Vite) dashboard that talks to it over `/api`. One deployable per side; no services split, because nothing needs independent scaling yet.
 
 ## Module map
 
@@ -32,6 +32,7 @@ Backend/
     main.py             create_app: middleware, static mounts, routers, lifespan
   tests/                pytest, with a fake detector (no weights needed)
   Construction-Site-Safety.ipynb   training notebook (Kaggle, self-contained)
+  output/               notebook outputs: weights/ (best.pt, ppe_data.yaml), plots/, metrics/, logs/, predictions/
 Frontend/src/
   lib/                  API clients, shared types, formatting, video job polling
   contexts/             PPEContext (app state) and session-state.ts (persisted UI mapping)
@@ -69,7 +70,7 @@ Frontend, enforced by ESLint `no-restricted-imports` (`Frontend/eslint.config.js
 - **Service container on `app.state`, not module globals.** Tests build an app with a fake detector and a temporary data folder; no global state leaks between requests or tests.
 - **Blocking work runs off the event loop.** Detection endpoints are sync handlers (FastAPI runs them in its threadpool), and video jobs run as sync background tasks. `Detector` serialises `predict` with a lock because YOLO is not thread safe; metrics, incidents and jobs use locks for concurrent writers.
 - **Temporal confirmation is per video job**, not global, so concurrent videos cannot corrupt each other's buffers. Single photos raise incidents straight away.
-- **Class names come from `Trained Weights/ppe_data.yaml`**, the dataset file the model was trained on.
+- **Weights and class names come from `Backend/output/weights/`** (`best.pt` and `ppe_data.yaml`), the folder the training notebook writes, so a retrained model is used as soon as its outputs are extracted there.
 - **JSON files, not a database.** The data is small, single-writer and local. Writes are atomic (temp file plus rename).
 - **The temporal window is served by `/api/config`**, so the frontend's "N consecutive frames" copy cannot drift from the backend.
 - **The frontend polls one job helper** (`lib/video-job.ts`) for video progress; the page no longer estimates progress from global metrics.
