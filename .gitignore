@@ -45,6 +45,12 @@ data/
 .cache/
 .pytest_cache/
 
+# Research paper: local Tectonic binary and build logs
+Materials/paper/tectonic.exe
+Materials/paper/tectonic
+Materials/paper/*.log
+Materials/paper/*.blg
+
 # Model weights (large files — track with Git LFS or exclude)
 *.onnx
 *.pt

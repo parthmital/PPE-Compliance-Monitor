@@ -155,7 +155,7 @@ PPE-Compliance-Monitor/
 |   |-- .env.example          backend settings template
 |   |-- Construction-Site-Safety.ipynb   Kaggle training notebook
 |   |-- output/               notebook outputs (extracted outputs.zip)
-|   |   |-- weights/          best.pt (served), last.pt, best.onnx, ppe_data.yaml
+|   |   |-- weights/          best.pt (served) and ppe_data.yaml
 |   |   |-- plots/            30 training and evaluation plots
 |   |   |-- metrics/          CSV and JSON metrics
 |   |   |-- logs/             full training log and GPU usage log
@@ -166,9 +166,10 @@ PPE-Compliance-Monitor/
 |   `-- src/                  React dashboard (pages, components, contexts, lib)
 |-- docs/screenshots/         dashboard screenshots used above
 `-- Materials/                project report, presentation, and reviews
+    `-- paper/                research paper (Elsevier elsarticle template, Tectonic build)
 ```
 
-The full module map is in [ARCHITECTURE.md](ARCHITECTURE.md).
+The full module map is in [ARCHITECTURE.md](ARCHITECTURE.md). The research paper's build steps are in [Materials/paper/README.md](Materials/paper/README.md).
 
 ## Configuration
 
