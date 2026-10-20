@@ -41,7 +41,7 @@ const CHECKS = [
 ];
 
 try {
-	runSetup();
+	await runSetup();
 } catch (error) {
 	if (!(error instanceof SetupError)) throw error;
 	console.error(`\n  ${style.red("✗")} ${error.message}\n`);

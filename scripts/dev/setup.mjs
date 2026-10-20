@@ -1,9 +1,16 @@
 // First-run setup for `npm run dev`. Every step is idempotent: it records a
-// hash of the file it installed from and skips the work when nothing changed.
+// hash of the file it installed from and skips the work when nothing changed,
+// so an interrupted install resumes on the next run.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import {
 	BACKEND_DIR,
@@ -16,8 +23,25 @@ import {
 
 const MIN_NODE = 18;
 const MIN_PYTHON = [3, 10];
+const PYTHON_STAMP = path.join(VENV_DIR, ".dev-setup-hash");
+const INTERRUPT_SIGNALS = ["SIGINT", "SIGBREAK"];
 
 export class SetupError extends Error {}
+
+// Set when Ctrl+C reaches this console during setup. VS Code can send one on
+// its own: its Python terminal auto-activation types Ctrl+C before running the
+// activate command when it spots a new .venv.
+let interrupted = false;
+const onInterrupt = () => {
+	interrupted = true;
+};
+
+function throwIfInterrupted() {
+	if (!interrupted) return;
+	throw new SetupError(
+		"Setup was interrupted by Ctrl+C. Nothing is lost: run `npm run dev` again to resume. If you did not press Ctrl+C, VS Code sent it while auto-activating the new .venv; set `python-envs.terminal.autoActivationType` to `shellStartup` in your VS Code user settings to keep auto-activation without it.",
+	);
+}
 
 function step(label, detail, ok = true) {
 	const mark = ok ? style.green("✓") : style.yellow("!");
@@ -36,22 +60,23 @@ function readStamp(file) {
 	return existsSync(file) ? readFileSync(file, "utf8").trim() : null;
 }
 
-function run(file, args, options = {}) {
-	const result = spawnSync(file, args, { stdio: "inherit", ...options });
-	if (result.error) throw result.error;
-	return result.status === 0;
+// Asynchronous so the interrupt listener runs while the child is working.
+async function run(file, args, options = {}) {
+	throwIfInterrupted();
+	const status = await new Promise((resolve, reject) => {
+		const child = spawn(file, args, { stdio: "inherit", ...options });
+		child.once("error", reject);
+		child.once("close", resolve);
+	});
+	throwIfInterrupted();
+	return status === 0;
 }
 
 // Run npm through the same npm CLI that invoked this script, so no shell is needed.
 function npm(args, cwd) {
 	const npmCli = process.env.npm_execpath;
 	if (npmCli) return run(process.execPath, [npmCli, ...args], { cwd });
-	const result = spawnSync(`npm ${args.join(" ")}`, {
-		stdio: "inherit",
-		cwd,
-		shell: true,
-	});
-	return result.status === 0;
+	return run(`npm ${args.join(" ")}`, [], { cwd, shell: true });
 }
 
 function pythonVersion(file, args) {
@@ -101,7 +126,7 @@ function checkNode() {
 	step("Node.js", `v${process.versions.node}`);
 }
 
-function ensureFrontendPackages() {
+async function ensureFrontendPackages() {
 	const lockFile = path.join(FRONTEND_DIR, "package-lock.json");
 	const stampFile = path.join(FRONTEND_DIR, "node_modules", ".dev-setup-hash");
 	const vite = path.join(
@@ -118,7 +143,7 @@ function ensureFrontendPackages() {
 	}
 
 	announce("Installing frontend packages (npm install)");
-	if (!npm(["install", "--no-audit", "--no-fund"], FRONTEND_DIR)) {
+	if (!(await npm(["install", "--no-audit", "--no-fund"], FRONTEND_DIR))) {
 		throw new SetupError(
 			"npm install failed in Frontend/. See the output above.",
 		);
@@ -129,21 +154,34 @@ function ensureFrontendPackages() {
 	step("Frontend packages", "installed");
 }
 
-function ensureVenv() {
-	if (existsSync(VENV_PYTHON)) {
-		const version = pythonVersion(VENV_PYTHON, []);
-		if (!version) {
+// A .venv is usable when its interpreter runs and, until packages have been
+// installed into it once, pip runs too (an interrupted `venv` can leave pip out).
+function isVenvHealthy() {
+	if (!pythonVersion(VENV_PYTHON, [])) return false;
+	if (existsSync(PYTHON_STAMP)) return true;
+	return spawnSync(VENV_PYTHON, ["-m", "pip", "--version"]).status === 0;
+}
+
+async function ensureVenv() {
+	if (existsSync(VENV_DIR)) {
+		if (isVenvHealthy()) {
+			const version = pythonVersion(VENV_PYTHON, []);
+			step("Python environment", `.venv (Python ${version.join(".")})`);
+			return;
+		}
+		announce("Removing the incomplete .venv left by an earlier run");
+		try {
+			rmSync(VENV_DIR, { recursive: true, force: true, maxRetries: 5 });
+		} catch (error) {
 			throw new SetupError(
-				`The virtual environment at ${path.relative(ROOT, VENV_DIR)} is broken. Delete the .venv folder and run \`npm run dev\` again.`,
+				`The virtual environment at ${path.relative(ROOT, VENV_DIR)} is broken and could not be removed (${error.code}). Close programs using it, delete the .venv folder and run \`npm run dev\` again.`,
 			);
 		}
-		step("Python environment", `.venv (Python ${version.join(".")})`);
-		return;
 	}
 
 	const python = findSystemPython();
 	announce(`Creating .venv with Python ${python.version.join(".")}`);
-	if (!run(python.file, [...python.args, "-m", "venv", VENV_DIR])) {
+	if (!(await run(python.file, [...python.args, "-m", "venv", VENV_DIR]))) {
 		throw new SetupError("Could not create the Python virtual environment.");
 	}
 	step(
@@ -152,11 +190,10 @@ function ensureVenv() {
 	);
 }
 
-function ensurePythonPackages() {
+async function ensurePythonPackages() {
 	const requirements = path.join(BACKEND_DIR, "requirements.txt");
-	const stampFile = path.join(VENV_DIR, ".dev-setup-hash");
 
-	if (readStamp(stampFile) === fileHash(requirements)) {
+	if (readStamp(PYTHON_STAMP) === fileHash(requirements)) {
 		step("Python packages", "up to date");
 		return;
 	}
@@ -164,7 +201,7 @@ function ensurePythonPackages() {
 	announce(
 		"Installing backend packages into .venv (the first run downloads PyTorch and can take several minutes)",
 	);
-	const installed = run(VENV_PYTHON, [
+	const installed = await run(VENV_PYTHON, [
 		"-m",
 		"pip",
 		"install",
@@ -175,7 +212,7 @@ function ensurePythonPackages() {
 	if (!installed) {
 		throw new SetupError("pip install failed. See the output above.");
 	}
-	writeFileSync(stampFile, fileHash(requirements));
+	writeFileSync(PYTHON_STAMP, fileHash(requirements));
 	console.log();
 	step("Python packages", "installed");
 }
@@ -216,15 +253,20 @@ function checkModelWeights() {
 	return `No model weights at ${path.relative(ROOT, weights)}. The app still starts; upload a .pt file from the Analyse page, or place best.pt there and restart.`;
 }
 
-// Returns a list of non-fatal warnings to show once the app is running.
-export function runSetup() {
-	console.log(style.bold("  Setup"));
-	checkNode();
-	ensureFrontendPackages();
-	ensureVenv();
-	ensurePythonPackages();
-	ensureEnvFiles();
-	const warnings = [checkModelWeights()].filter(Boolean);
-	console.log();
-	return warnings;
+// Resolves to a list of non-fatal warnings to show once the app is running.
+export async function runSetup() {
+	for (const signal of INTERRUPT_SIGNALS) process.on(signal, onInterrupt);
+	try {
+		console.log(style.bold("  Setup"));
+		checkNode();
+		await ensureFrontendPackages();
+		await ensureVenv();
+		await ensurePythonPackages();
+		ensureEnvFiles();
+		const warnings = [checkModelWeights()].filter(Boolean);
+		console.log();
+		return warnings;
+	} finally {
+		for (const signal of INTERRUPT_SIGNALS) process.off(signal, onInterrupt);
+	}
 }

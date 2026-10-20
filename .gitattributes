@@ -1,2 +1,3 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalise text files to LF in the repository and in every working copy, so
+# Prettier and Black see the same line endings on Windows as in CI
+* text=auto eol=lf

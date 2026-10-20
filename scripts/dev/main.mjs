@@ -221,7 +221,7 @@ async function main() {
 
 	let warnings;
 	try {
-		warnings = runSetup();
+		warnings = await runSetup();
 	} catch (error) {
 		fail(error instanceof SetupError ? error.message : String(error));
 	}
