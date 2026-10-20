@@ -167,7 +167,7 @@ PPE-Compliance-Monitor/
 |-- docs/screenshots/         dashboard screenshots used above
 `-- Materials/                project report, presentation, and reviews
     |-- paper/                research paper (Elsevier elsarticle template, Tectonic build)
-    `-- presentation/         10-slide Markdown outline for Gamma.app
+    `-- presentation/         19-slide deck (presentation.pptx) and 10-slide Markdown outline for Gamma.app
 ```
 
 The full module map is in [ARCHITECTURE.md](ARCHITECTURE.md). The research paper's build steps are in [Materials/paper/README.md](Materials/paper/README.md).
